@@ -106,7 +106,7 @@ Explicitly modeled, because this user determines whether the project passes.
 ## 3. MVP Feature Requirements
 
 ### F1 — Canvas with pan & zoom `[GATE]`
-- Bounded workspace of **5,000 × 5,000 px** world space. Not infinite; should feel spacious.
+- Bounded workspace of **10,000 × 10,000 px** world space. Not infinite; should feel spacious.
 - Pan: space-drag, middle-mouse drag, or trackpad two-finger scroll.
 - Zoom: scroll wheel / pinch, zoom-to-cursor, clamped to ~10%–400%.
 - 60 FPS during pan/zoom.
@@ -837,7 +837,7 @@ will feel worth reopening.
 | 2 | Auth method | **Email + password *and* Google OAuth** |
 | 3 | MVP shape | **Rectangle only** |
 | 4 | Creation gesture | **Click-to-place, fixed size** |
-| 5 | Canvas scope | **One global canvas, 5,000 × 5,000** |
+| 5 | Canvas scope | **One global canvas, 10,000 × 10,000** |
 | 6 | Billing | **Spark free tier — billing not enabled** |
 | 7 | Hosting | **Vercel — configured outside this document** |
 | 8 | Array writes | **All Firestore writes via `runTransaction`** |
@@ -861,7 +861,7 @@ additional credit and adds a shape-type branch to every code path the sync layer
 gesture-state machine competing for the same mouse events — a genuine source of late-stage
 bugs for cosmetic gain. See R13.
 
-**5. One global canvas, 5,000 × 5,000.** No rooms, no routing, no join flow. The evaluator
+**5. One global canvas, 10,000 × 10,000.** No rooms, no routing, no join flow. The evaluator
 signs in and is *already* in the shared space with everyone else.
 
 **6. Spark free tier, billing not enabled.** No paid tier, no card on file. Two meters now

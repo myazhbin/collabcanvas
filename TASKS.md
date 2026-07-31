@@ -98,7 +98,7 @@ collabcanvas/
     │   └── presenceService.ts    # onDisconnect, heartbeat                      [R9]
     │
     ├── utils/                    # PURE. no React, no Firebase, no side effects
-    │   ├── constants.ts          # 5000×5000, shape size, palette, throttle ms
+    │   ├── constants.ts          # 10000×10000, shape size, palette, throttle ms
     │   ├── session.ts            # sessionId = crypto.randomUUID() once per tab [R2]
     │   ├── helpers.ts         🧪 # generateUserColor
     │   ├── helpers.test.ts    🧪
@@ -209,7 +209,7 @@ owner. Get a URL live early anyway `[R1]`.
 - [ ] Assert `databaseURL` is present at startup and throw a legible error if not `[R15]`
 - [ ] `session.ts` — `export const sessionId = crypto.randomUUID()` at module level, so
       it's once per tab `[R2]`
-- [ ] `constants.ts` — 5000×5000 canvas, 120×80 shape, palette, 50 ms throttle
+- [ ] `constants.ts` — 10000×10000 canvas, 120×80 shape, palette, 50 ms throttle
 - [ ] `types.ts` — `Shape`, `SessionNode`, `CanvasDoc` matching PRD §4.3
 - [ ] Commit **both** rulesets to `firestore.rules` and `database.rules.json`, matching
       what you pasted into the console. **From this moment the files are the source of
@@ -299,7 +299,7 @@ a fresh incognito window — and Google works from a **non-owner** account `[R8]
 - [ ] Stage scale + position in component state. **Local-only, never synced** `[F1]`
 - [ ] Zoom-to-cursor on wheel, clamped ~10%–400%
 - [ ] Pan via space-drag / middle-drag / trackpad scroll
-- [ ] World bounds **5,000 × 5,000** from `constants.ts` `[F1]`
+- [ ] World bounds **10,000 × 10,000** from `constants.ts` `[F1]`
 - [ ] Separate `<Layer>`s from the start — shapes and cursors must never share one `[R7]`
 - [ ] Verify 60 FPS in DevTools during continuous pan and zoom
 

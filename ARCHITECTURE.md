@@ -5,7 +5,7 @@ UI[UI Components]
 
             subgraph "Components Layer"
                 Auth[Auth Components<br/>Login/Signup]
-                Canvas[Canvas Components<br/>Canvas/Rectangle/Controls<br/>5000x5000px bounded]
+                Canvas[Canvas Components<br/>Canvas/Rectangle/Controls<br/>10000x10000px bounded]
                 Collab[Collaboration Components<br/>Cursor/Presence]
                 Layout[Layout Components<br/>Navbar]
             end
