@@ -25,6 +25,7 @@ UI[UI Components]
             subgraph "Services Layer"
                 AuthSvc[Auth Service<br/>signup/login/Google/logout]
                 CanvasSvc[Canvas Service<br/>CRUD + Locking operations]
+                TxnSvc[Transaction Wrapper<br/>runTransaction read-modify-write<br/>prevents full-array clobber<br/>auto-retries on contention]
                 CursorSvc[Cursor Service<br/>Position updates]
                 PresenceSvc[Presence Service<br/>Online status]
                 FirebaseInit[Firebase Initialization<br/>Config & Init]
@@ -37,6 +38,7 @@ UI[UI Components]
             subgraph "Utilities"
                 Helpers[Helper Functions<br/>generateUserColor]
                 Constants[Constants<br/>Canvas dimensions]
+                Session[Session ID<br/>crypto.randomUUID<br/>ONCE PER TAB, not per user]
             end
         end
     end
@@ -47,11 +49,11 @@ UI[UI Components]
         end
 
         subgraph "Cloud Firestore"
-            FSShapes[(Canvas Document<br/>canvas/global-canvas-v1<br/>Shapes array + Locking<br/>Persistent Storage)]
+            FSShapes[(Canvas Document<br/>canvas/global-canvas-v1<br/>Shapes array + Locking<br/>ALL writes transactional<br/>Persistent Storage)]
         end
 
         subgraph "Realtime Database"
-            RTDBSession[(Session Path<br/>/sessions/global-canvas-v1/userId<br/>Cursor + Presence combined<br/>High-frequency updates)]
+            RTDBSession[(Session Path<br/>/sessions/global-canvas-v1/sessionId<br/>uid stored as a FIELD, never the key<br/>Cursor + Presence combined<br/>High-frequency updates)]
         end
 
         subgraph "Firebase Hosting"
@@ -107,9 +109,12 @@ UI[UI Components]
     %% Utilities
     Helpers -.-> Collab
     Constants -.-> Canvas
+    Session -.->|sessionId = node key| CursorSvc
+    Session -.->|sessionId = node key| PresenceSvc
 
     %% Real-time sync paths
-    CanvasSvc -->|Create/Update/Delete<br/>Lock/Unlock<br/>under 100ms| FSShapes
+    CanvasSvc -->|Create/Update/Delete<br/>Lock/Unlock| TxnSvc
+    TxnSvc -->|runTransaction<br/>every write to the shapes array<br/>under 100ms| FSShapes
     FSShapes -->|Real-time listener<br/>onSnapshot| CanvasSvc
 
     CursorSvc -->|Position updates<br/>under 50ms at 20-30 FPS| RTDBSession
@@ -145,7 +150,7 @@ UI[UI Components]
     classDef rendering fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
     classDef user fill:#fce4ec,stroke:#c2185b,stroke-width:3px
 
-    class Auth,Canvas,Collab,Layout,AuthCtx,CanvasCtx,useAuth,useCanvas,useCursors,usePresence,AuthSvc,CanvasSvc,CursorSvc,PresenceSvc,FirebaseInit,Helpers,Constants client
+    class Auth,Canvas,Collab,Layout,AuthCtx,CanvasCtx,useAuth,useCanvas,useCursors,usePresence,AuthSvc,CanvasSvc,TxnSvc,CursorSvc,PresenceSvc,FirebaseInit,Helpers,Constants,Session client
     class FBAuth,FSShapes,RTDBSession,Hosting firebase
     class UnitTests,IntegrationTests,AuthEmu,FirestoreEmu,RTDBEmu testing
     class Konva rendering
