@@ -17,8 +17,10 @@
     "jsx": "react-jsx",
 
     /* Linting */
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
+    /* Both false on purpose [R18]: `tsc -b && vite build` refuses to emit once
+       refactoring leaves an unused import behind, which would block a deploy. */
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },

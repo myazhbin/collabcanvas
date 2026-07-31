@@ -46,7 +46,7 @@ criterion — materially more reliable than reading generated code and judging b
 
 ```
 collabcanvas/
-├── firebase.json                 # hosting: public=dist, SPA rewrite, no-cache on html  [R12]
+├── firebase.json                 # rules deploy targets only — no hosting block         [R5]
 ├── .firebaserc
 ├── firestore.rules               # PRD §4.4                                             [R5]
 ├── database.rules.json           # PRD §4.4                                             [R5]
@@ -133,8 +133,9 @@ inside their services. Splitting them out is what makes the test plan fit in an 
 `shapeOps.ts` in particular exists so the **transaction bodies are testable without
 Firestore**, which is the only cheap way to verify R23.
 
-**Deliberately absent:** any Cloud Functions directory, any `vercel.json`, any `.env`
-(config is hardcoded — R1), any Playwright directory.
+**Deliberately absent:** any Cloud Functions directory, any `.env` (config is hardcoded —
+R1), any Playwright directory. Host configuration is not covered here — deployment is
+handled separately, on Vercel, by the project owner (PRD F9).
 
 ---
 
@@ -159,45 +160,40 @@ Ordering is load-bearing (PRD §4.6). Several steps are painful or impossible to
 
 ---
 
-## PR 1 — Scaffold, Konva smoke test, first deploy
-**Closes gate 8** · **~1.75h** · `feat: scaffold vite+react+konva+vitest, deploy to firebase hosting`
+## PR 1 — Scaffold and Konva smoke test
+**~1.5h** · `feat: scaffold vite+react+konva+vitest`
 
-Hit production first, before any feature code `[R1]`.
+Deployment is not part of this PR — it is handled separately, on Vercel, by the project
+owner. Get a URL live early anyway `[R1]`.
 
 **Files:** `+package.json` `+tsconfig.json` `+tsconfig.app.json` `+vite.config.ts`
-`+index.html` `+firebase.json` `+.firebaserc` `+src/main.tsx` `+src/App.tsx`
-`+src/index.css` `+README.md`
+`+index.html` `+src/main.tsx` `+src/App.tsx` `+src/index.css` `+README.md`
 
-- [ ] `npm create vite@latest` → React + TypeScript
-- [ ] **Pin `react` and `react-dom` to `^19.2.0`**, install `konva` explicitly alongside
+- [x] `npm create vite@latest` → React + TypeScript
+- [x] **Pin `react` and `react-dom` to `^19.2.0`**, install `konva` explicitly alongside
       `react-konva` — peer mismatch is the most likely thing to stall you at the very
       start `[R18]`
-- [ ] Pin the Vite major explicitly (latest is 8.x)
-- [ ] Install Tailwind; wire the entry into `src/index.css`
-- [ ] `~tsconfig.app.json` — `noUnusedLocals: false`, `noUnusedParameters: false` **now**,
+- [x] Pin the Vite major explicitly (latest is 8.x)
+- [x] Install Tailwind; wire the entry into `src/index.css`
+- [x] `~tsconfig.app.json` — `noUnusedLocals: false`, `noUnusedParameters: false` **now**,
       or `tsc -b && vite build` refuses to emit once refactoring leaves unused imports
       behind `[R18]`
-- [ ] Render one hardcoded blue `<Rect>` in a `<Stage>` and confirm it paints **before**
+- [x] Render one hardcoded blue `<Rect>` in a `<Stage>` and confirm it paints **before**
       touching Firebase `[R18]`
-- [ ] `firebase init hosting` — **public directory `dist`, not the default `public`**, and
-      answer **yes** to the SPA rewrite. Get either wrong and you deploy the Firebase
-      welcome page `[R12]`
-- [ ] `~firebase.json` — add a headers block setting `Cache-Control: no-cache` on
-      `**/*.html`. Do this now, not after a grader gets a white screen `[R12]`
-- [ ] **Add no other headers** — a COOP block breaks `signInWithPopup` `[R20]`
-- [ ] `npm run build && firebase deploy --only hosting`; note the bare hostname
-- [ ] Confirm that hostname is in Authorized domains `[R8]`
+- [x] **Set no COOP or cross-origin-isolation headers** anywhere — not in the build, not in
+      the host config. It silently breaks `signInWithPopup` in PR 3 `[R20]`
+- [ ] Once a URL is live, confirm that hostname is in Firebase Auth → Authorized domains.
+      Hosting off Firebase means nothing pre-authorizes it `[R8]`
 
 **🧪 Test setup — Tier 1 · ~15m**
-- [ ] `npm i -D vitest`; add a `test` block to `~vite.config.ts` (environment `node` — no
+- [x] `npm i -D vitest`; add a `test` block to `~vite.config.ts` (environment `node` — no
       jsdom needed, nothing under test touches the DOM)
-- [ ] `"test": "vitest run"` and `"test:watch": "vitest"` in `~package.json`
-- [ ] One trivial passing test to prove the harness runs
-- [ ] **Do not** gate the deploy on tests — a red test must not block a deploy when
+- [x] `"test": "vitest run"` and `"test:watch": "vitest"` in `~package.json`
+- [x] One trivial passing test to prove the harness runs
+- [x] **Do not** gate the deploy on tests — a red test must not block a deploy when
       deployment is itself a gate item `[R1]`
 
-**Done when:** the deployed URL renders a blue rectangle in a fresh incognito window and
-`npm test` passes.
+**Done when:** the app renders a blue rectangle and `npm test` passes.
 
 ---
 
@@ -571,7 +567,7 @@ Low effort, high grading yield. Do not skip this for more features.
 ## PR 11 — Acceptance pass
 **~2h** · `fix: acceptance pass findings`
 
-Run all 21 items in PRD §7 **on the deployed URL**, in fresh incognito windows. This is the
+Run all 20 items in PRD §7 **on the deployed URL**, in fresh incognito windows. This is the
 verification layer for everything the unit tests deliberately don't cover — real
 `onDisconnect` behaviour, real network, real multi-client sync.
 
@@ -587,13 +583,11 @@ verification layer for everything the unit tests deliberately don't cover — re
 - [ ] Item 18: brand-new email, display name on cursor immediately, no reload `[R11]`
 - [ ] Item 19: Google sign-in from a **non-owner** account, no warning screen `[R8]`
 - [ ] Item 20: repeat 18–19 in **Safari** `[R4]`
-- [ ] Item 21: redeploy, hard-reload a previously-visited URL → new build, no white
-      screen `[R12]`
 - [ ] `npm test` green before the final push
 - [ ] Final: open the exact URL you're about to submit in a fresh incognito window and
       click the Google button before pasting it anywhere `[R8]`
 
-**Done when:** twenty-one green.
+**Done when:** twenty green.
 
 ---
 
@@ -616,11 +610,10 @@ verification layer for everything the unit tests deliberately don't cover — re
 | R1, R8 — deploy, OAuth | Critical | **Manual only** — console/platform config |
 | R9 — `onDisconnect` re-arming | High | **Manual only** — needs a real socket |
 | R11 — displayName race | High | **Manual only** — manual 18 |
-| R12 — stale index.html | High | **Manual only** — manual 21 |
 | R14, R15 — quota, region | Medium | **Manual only** — console config |
 | R18, R19, R20, R21, R22 | Low/Med | **Manual only** |
 
-**Twelve of twenty-four risks get an automated assertion**, including five of the eight
+**Twelve of twenty-three risks get an automated assertion**, including five of the eight
 criticals. The uncovered ones are overwhelmingly console configuration and real-socket
 behaviour — genuinely not unit-testable, and correctly left to PR 11.
 
@@ -631,7 +624,7 @@ behaviour — genuinely not unit-testable, and correctly left to PR 11.
 | PR | Base | +Tests | Cumulative |
 |---|---|---|---|
 | 0 — Console setup | 0.75h | — | 0.75h |
-| 1 — Scaffold & deploy | 1.5h | +0.25h | 2.5h |
+| 1 — Scaffold | 1.5h | +0.25h | 2.5h |
 | 2 — Firebase wiring | 1.5h | *(Tier 3: +1.5h)* | 4h |
 | 3 — Auth | 3h | +0.33h | 7.33h |
 | 4 — Pan & zoom | 1.5h | +0.17h | 9h |
@@ -670,6 +663,6 @@ than late:**
 
 Taking 1 and 2 lands at **~22.7h**. Taking 1–3 lands at **~22h**.
 
-**Never cut:** the deploy in PR 1 `[R1]`, the sessionId keying in PR 5 `[R2]`, the
+**Never cut:** getting a URL live early `[R1]`, the sessionId keying in PR 5 `[R2]`, the
 transaction wrapper in PR 8 `[R23]`, the four Tier 1 test files, or the acceptance pass in
 PR 11.

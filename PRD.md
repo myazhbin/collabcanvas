@@ -233,8 +233,13 @@ Plus:
   stale positions on reconnect, making remote cursors rubber-band through an obsolete path.
 
 ### F9 — Deployment `[GATE]`
-- **Firebase Hosting**, publicly accessible URL, works in a fresh incognito window.
-- Deployed **first, before any feature code** — see R1. This is a gate item; treat it as one.
+- Publicly accessible URL, works in a fresh incognito window.
+- **The host is out of scope for this document.** Deployment is handled separately, on
+  Vercel, by the project owner. Nothing in this document depends on the host.
+- Deployed **early, not at the end** — see R1. This is a gate item; treat it as one.
+- **The deployed domain must be added to Firebase Auth → Authorized domains by hand.**
+  Deploying off Firebase means nothing pre-authorizes the production hostname, and Google
+  sign-in fails with `auth/unauthorized-domain` until it is listed. See R8.
 - Verified from a second machine or phone.
 
 ### F10 — Non-functional targets
@@ -260,13 +265,16 @@ Plus:
 | Auth | **Firebase Authentication** | Email/password + Google, no confirmation wall, session persistence with zero config. |
 | Durable store | **Cloud Firestore** — `canvas/global-canvas-v1`, shapes array, **all writes transactional** | One document = one read on cold load. Transactions are what stop concurrent edits clobbering the array. |
 | Ephemeral transport | **Firebase Realtime Database** — `/sessions/global-canvas-v1/{sessionId}` | Cursor + presence + in-flight drag on one node. `onDisconnect()` is server-side and RTDB-exclusive. |
-| Hosting | **Firebase Hosting** | Same console, same CLI, default domains pre-authorized for OAuth. |
 | Billing | **Spark (free tier) — billing not enabled** | Two meters now bind: Firestore daily ops **and** RTDB monthly bandwidth. See §4.5. |
 | Styling | **Tailwind** | Fast, no design system needed at this scope. |
 | Unit tests | **Vitest** | Pure logic in `src/utils`. |
 | Integration tests | **Firebase Emulator Suite** (Auth + Firestore + RTDB) | Rules and multi-client scenarios. **Requires a JRE.** |
 
-**Not provisioned:** Cloud Functions (requires a paid plan) · Vercel.
+**Not provisioned:** Cloud Functions (requires a paid plan).
+
+**Hosting is not covered here.** The app is deployed on Vercel, configured outside this
+document. The only thing the rest of this document requires of the host is that the
+production domain is listed in Firebase Auth → Authorized domains (F9, R8).
 
 ### 4.2 The architectural split: Firestore durable, RTDB ephemeral
 
@@ -502,16 +510,16 @@ Load-bearing ordering. Several of these are painful or impossible to reverse.
 4. Register the web app; copy the config object.
 5. Enable **both** auth providers. Enabling only Google makes the email path throw
    `auth/operation-not-allowed`.
-6. Authorized domains: confirm what's actually listed. `localhost` is **not present by
-   default** in projects created after 2025-04-28. Firebase Hosting's own domains are
-   normally pre-authorized — read the list rather than assuming.
+6. Authorized domains: confirm what's actually listed, then **add both `localhost` and the
+   production domain by hand**. `localhost` is not present by default in projects created
+   after 2025-04-28, and because the app is hosted off Firebase, nothing pre-authorizes the
+   production hostname either. Google sign-in fails on any domain missing from this list.
 7. Google Cloud Console → confirm Audience = **External**, Publishing status =
    **In production**.
 8. Paste **both** rulesets from §4.4 and Publish.
-9. `firebase init hosting` — **set the public directory to `dist`, not the default
-   `public`**, and answer yes to the single-page-app rewrite. Deploy a near-empty Vite app
-   that only calls `initializeApp` and prints auth state. Click a throwaway Google sign-in
-   button **on the deployed URL**.
+9. Deploy a near-empty Vite app that only calls `initializeApp` and prints auth state, then
+   click a throwaway Google sign-in button **on the deployed URL** — early, while there is
+   still time to fix the Authorized-domains and OAuth-consent failures it surfaces.
 10. Hardcode the Firebase config in `src/services/firebase.ts`. The web API key is
     documented as public and safe to commit, and this deletes the entire env-var failure
     class.
@@ -528,10 +536,10 @@ Ordered by how likely each is to cost you the gate.
 
 **R1 — Deploying for the first time late.** Gate item 8 is the only requirement with no
 partial credit, and it depends on a chain that each fail in unfamiliar ways: the
-`firebase.json` public directory and SPA rewrite, the production hostname in Authorized
-domains, Google OAuth verified from a non-owner account, and index.html caching (R12).
-Each is a 5-minute task and a 90-minute debugging session. Attempting them in sequence once
-the build is otherwise finished is the single most common way this class of project fails.
+single-page-app rewrite on whatever host you use, the production hostname in Authorized
+domains, and Google OAuth verified from a non-owner account. Each is a 5-minute task and a
+90-minute debugging session. Attempting them in sequence once the build is otherwise
+finished is the single most common way this class of project fails.
 *Mitigation:* §4.6, first, before any feature code.
 
 **R2 — Sessions keyed by uid.** Firebase Auth persistence is shared across all tabs of a
@@ -567,8 +575,8 @@ now doubled because there are two rulesets. A database in locked mode denies eve
 you spend 45 minutes suspecting Konva. Test mode works but expires. And `firebase init`
 scaffolds local rule files that `firebase deploy` pushes over whatever you edited in the
 console — the classic late-stage story where everything 403s and the deploy itself is the
-last thing you suspect. **You are running `firebase init` for hosting and emulators
-regardless, so this trap is now unavoidable rather than optional.** *Mitigation:* console
+last thing you suspect. **You are running `firebase init` for the rulesets regardless, so
+this trap is unavoidable rather than optional.** *Mitigation:* console
 during setup, then immediately copy both rulesets into `firestore.rules` and `database.rules.json` and
 treat the files as the single source of truth. Flags differ: `--only firestore:rules` and
 `--only database`.
@@ -635,17 +643,6 @@ state before calling `createUser`, write it onto the session node yourself, fire
 `updateProfile` unawaited. **Never `setUser({...auth.currentUser})`** — `User` is a class
 instance whose methods include `getIdToken()`; spreading it silently loses that.
 
-**R12 — Firebase Hosting serves a stale `index.html` for up to an hour.** Two independent
-empirical checks found `cache-control: max-age=3600` on the root HTML of live `*.web.app`
-sites — undocumented, but currently reproducible. Redeploying purges the CDN but not
-already-populated browser caches, so a grader who loaded the page earlier gets the stale
-shell — and because that HTML references purged hashed asset filenames, the usual result is
-a **blank white screen**, not merely an old version. *Mitigation:* set
-`Cache-Control: no-cache` on `**/*.html` in the `firebase.json` headers block from the start.
-Two adjacent traps in the same file: `firebase init hosting` defaults the public directory
-to `public`, not Vite's `dist`, and the SPA rewrite question must be answered yes — get
-either wrong and you deploy the Firebase welcome page.
-
 **R13 — `Stage draggable` pan makes every pan gesture also place a phantom rectangle.**
 Konva fires a click at the end of a drag, so finishing a pan drops a rectangle where you
 released. Siblings land at the same moment: clicking an existing shape stacks a new one on
@@ -708,13 +705,13 @@ console. *Mitigation:* the ordering in F7, plus keying the listener `useEffect` 
 `user?.uid` rather than `[]`.
 
 **R20 — A COOP header silently breaks `signInWithPopup`.** If anything sets
-`Cross-Origin-Opener-Policy: same-origin` — a `firebase.json` headers block copied from a
+`Cross-Origin-Opener-Policy: same-origin` — a host headers block copied from a
 "secure your app" post, or a Vite plugin enabling cross-origin isolation — the popup is
 severed from `window.opener` and the promise never settles. The user sees consent succeed,
 then a dead tab, then an app spinning forever with no error. Confounding this,
 `accounts.google.com` emits a *benign* report-only COOP warning even when sign-in works, so
-you can burn an hour chasing a non-bug. *Mitigation:* the only header you should add to
-`firebase.json` is the `Cache-Control` one from R12. If a COOP block exists, use
+you can burn an hour chasing a non-bug. *Mitigation:* set no cross-origin-isolation headers
+in the host config, and enable no Vite plugin that sets them. If a COOP block exists, use
 `same-origin-allow-popups`. Diagnostic: if the popup *closes* and the promise resolves, the
 warning is Google's harmless one; if the popup stays open and the promise never resolves,
 it's your header. Also call `signInWithPopup` synchronously as the first statement in the
@@ -823,10 +820,8 @@ Executed on the **deployed URL**, not localhost, with production rules.
 19. Fresh incognito window → "Sign in with Google" completes from **a non-owner Google
     account**, with no unverified-app warning and no unauthorized-domain error.
 20. Repeat 18–19 in **Safari**, not just Chrome.
-21. Redeploy, then hard-reload the URL a grader already visited → new build, not a white
-    screen `[R12]`.
 
-Twenty-one green = gate passed. Items 7, 8, 14, 15, 16, 19, 20, and 21 exist because each
+Twenty green = gate passed. Items 7, 8, 14, 15, 16, 19, and 20 exist because each
 maps to a risk in §5 that passes a naive test.
 
 ---
@@ -844,7 +839,7 @@ will feel worth reopening.
 | 4 | Creation gesture | **Click-to-place, fixed size** |
 | 5 | Canvas scope | **One global canvas, 5,000 × 5,000** |
 | 6 | Billing | **Spark free tier — billing not enabled** |
-| 7 | Hosting | **Firebase Hosting** |
+| 7 | Hosting | **Vercel — configured outside this document** |
 | 8 | Array writes | **All Firestore writes via `runTransaction`** |
 | 9 | In-flight drag | **RTDB session node; Firestore on release** ⚠️ *assumed* |
 
@@ -873,10 +868,11 @@ signs in and is *already* in the shared space with everyone else.
 bind — Firestore daily ops and RTDB monthly bandwidth — and they fail differently (§4.5).
 The trade is accepted; the compensating controls are mandatory.
 
-**7. Firebase Hosting.** One console, one CLI, and the default domains are normally
-pre-authorized for OAuth, which removes a step. The cost is the undocumented one-hour
-`index.html` cache (R12), fixed with three lines in `firebase.json` — and that Phase 2's AI
-endpoint has no free home on Firebase, which is deferred rather than solved.
+**7. Vercel, configured outside this document.** Hosting is the project owner's to set up
+and is deliberately not specified here. Two consequences this document does own: the
+production domain must be added to Firebase Auth → Authorized domains by hand, since
+nothing off-Firebase is pre-authorized (F9, R8); and the host must set no COOP header, or
+`signInWithPopup` breaks (R20).
 
 **8. All Firestore writes via `runTransaction`.** Non-negotiable with a shapes array in one
 document: a plain `updateDoc` means two users editing different rectangles clobber each
@@ -908,10 +904,8 @@ emails/day. (We don't use magic links.)
 window — Firebase guarantees `onDisconnect` fires but publishes no timeout, keepalive, or
 heartbeat interval. The heartbeat backstop in F6 is right *precisely because* the number is
 undocumented. Similarly: test-mode's "~30 day" expiry (mechanism real, length unstated);
-Firebase Hosting's `max-age=3600` on index.html (R12 — empirically reproduced twice in
-independent sessions, not documented anywhere, so set the header explicitly rather than
-relying on knowing the default); and `auth/too-many-requests`, which triggers on repeated
-*failed* sign-ins — i.e. by you, iterating on the login form.
+and `auth/too-many-requests`, which triggers on repeated *failed* sign-ins — i.e. by you,
+iterating on the login form.
 
 **Estimated, and it propagates.** Per-message RTDB wire size drives *all* the bandwidth
 arithmetic in §4.5. Two research passes disagreed (120 B vs 150–250 B) and neither figure
@@ -939,10 +933,10 @@ Contention on a single document is still real; the published number is not.
 **Assumptions worth checking yourself.** That `openid`/`email`/`profile` are classified as
 non-sensitive scopes — the load-bearing premise under "a grader won't see an unverified-app
 screen," and no official page classifying them was found. Verify with a non-owner Google
-account before the gate. That Firebase Hosting's default domains are pre-authorized: the
-help page says only "localhost and your Firebase project's hosting domain," singular, and
-predates the April 2025 localhost removal — **read the console list during setup rather than
-assuming a two-entry default.**
+account before the gate. Assume **nothing** in Authorized domains is there for you: the
+help page describing the defaults says only "localhost and your Firebase project's hosting
+domain," predates the April 2025 localhost removal, and does not apply to a domain hosted
+elsewhere at all — **read the console list during setup and add what's missing.**
 
 **Untested.** No verification session ran the Firebase Emulator Suite on this machine, and
 it requires a JRE — run `java -version` before committing to the integration-test plan.

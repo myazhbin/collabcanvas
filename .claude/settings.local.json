@@ -63,7 +63,21 @@
       "Read(//Users/zed/**)",
       "Bash(echo \"exit:$?\")",
       "Read(//usr/local/Cellar/fff-mcp/0.10.1/bin/**)",
-      "mcp__fff__grep"
+      "mcp__fff__grep",
+      "Bash(npm --version)",
+      "Bash(firebase --version)",
+      "Bash(firebase projects:list)",
+      "Bash(bun add *)",
+      "Bash(bun run *)",
+      "Bash(node -e \"const c=require\\('./firebase.json'\\); console.log\\('public:', c.hosting.public\\); console.log\\('rewrites:', JSON.stringify\\(c.hosting.rewrites\\)\\); console.log\\('header keys:', c.hosting.headers.flatMap\\(h=>h.headers.map\\(x=>x.key\\)\\)\\)\")",
+      "Bash(firebase login:list)",
+      "Bash(firebase deploy *)",
+      "Bash(curl -sSI https://collabcanvas-60c5b.web.app/)",
+      "Bash(curl -sS -o /dev/null -w \"%{http_code}\\\\n\" https://collabcanvas-60c5b.web.app/some/deep/route)",
+      "Bash(curl -sSI https://collabcanvas-60c5b.web.app/assets/index-aerGBR5Z.js)",
+      "Bash(curl -sSI https://collabcanvas-60c5b.web.app/index.html)",
+      "Bash(curl -sSI https://collabcanvas-60c5b.web.app/canvas/deep/route)",
+      "mcp__fff__multi_grep"
     ]
   }
 }
