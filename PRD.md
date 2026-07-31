@@ -1,7 +1,7 @@
 # CollabCanvas — Product Requirements Document (MVP)
 
 **Status:** Draft for review
-**Scope:** MVP checkpoint only (Tuesday, 24-hour hard gate)
+**Scope:** MVP checkpoint only (hard gate)
 **Backend:** Firebase — Cloud Firestore (durable) + Realtime Database (ephemeral)
 **Canonical architecture:** [ARCHITECTURE.md](ARCHITECTURE.md)
 **Last updated:** 2026-07-28
@@ -16,8 +16,8 @@ move rectangles that sync instantly across all sessions.
 
 The MVP is not a feature deliverable. It is a **proof that the collaborative
 foundation is solid**. Per the brief: *"A simple canvas with bulletproof multiplayer
-is worth more than a feature-rich canvas with broken sync."* Every hour spent on
-shape variety, styling, or polish before sync is bulletproof is an hour spent wrong.
+is worth more than a feature-rich canvas with broken sync."* Shape variety, styling, and
+polish come after sync is bulletproof, never before.
 
 ### The gate (from the brief, verbatim)
 
@@ -234,8 +234,8 @@ Plus:
 
 ### F9 — Deployment `[GATE]`
 - **Firebase Hosting**, publicly accessible URL, works in a fresh incognito window.
-- Deployed in **hour 1**, not hour 20 — see R1. This is a gate item; treat it as one.
-- Verified from a second machine or phone before the deadline.
+- Deployed **first, before any feature code** — see R1. This is a gate item; treat it as one.
+- Verified from a second machine or phone.
 
 ### F10 — Non-functional targets
 | Metric | Target |
@@ -366,7 +366,7 @@ backward for a frame.
 
 ### 4.4 Security rules
 
-Two rulesets now. Paste both into the console in **hour 1** and Publish.
+Two rulesets now. Paste both into the console **during setup** and Publish.
 
 **Firestore** — `firestore.rules`:
 
@@ -452,7 +452,7 @@ Downstream messages/sec = N × f × (N−1); at N=5, f=20 Hz that's 400 msg/s. A
 hours/month against 10 GB. Movement-gating roughly doubles that, since idle users generate
 nothing.
 
-**Projected week:** ~1.4 GB solo dev + ~0.9 GB rehearsals + ~0.6 GB grading ≈
+**Projected total:** ~1.4 GB solo dev + ~0.9 GB rehearsals + ~0.6 GB grading ≈
 **2–3 GB, or 20–30% of the allowance.**
 
 #### Staying on Spark — what that commits you to
@@ -462,7 +462,7 @@ there is **no safety valve**, and the two meters fail differently:
 
 - **Firestore** resets daily. Blowing it costs you the rest of the day — bad, recoverable.
 - **RTDB** is metered monthly. Blowing it shuts the database off **for the remainder of the
-  calendar month**, for the whole project. Inside a one-week sprint that is unrecoverable.
+  calendar month**, for the whole project. There is no recovery before the month rolls over.
 
 The 2–3 GB projection leaves genuine headroom, but note §9: the per-message wire size
 driving it is an *estimate* that could be off by ~2× in either direction. A 2× miss lands
@@ -483,13 +483,13 @@ Three consequences:
 | Checkpoint | If exceeded | Do |
 |---|---|---|
 | Any day | 10k Firestore reads by midday | Check for a listener re-subscribing in a loop |
-| End of day 2 | 1.5 GB RTDB | Verify movement-gating fires; drop cursors to 15 Hz |
-| End of day 4 | 4 GB RTDB | Drop to 10 Hz; stop multi-user rehearsals; close idle tabs |
+| Early in the month | 1.5 GB RTDB | Verify movement-gating fires; drop cursors to 15 Hz |
+| Any time | 4 GB RTDB | Drop to 10 Hz; stop multi-user rehearsals; close idle tabs |
 | Any time | 7 GB RTDB | 10 Hz, and freeze all non-grading multi-user testing |
 
 The single realistic way to blow the monthly cap is leaving a tab broadcasting overnight.
 
-### 4.6 Hour-0 setup order
+### 4.6 Setup order
 
 Load-bearing ordering. Several of these are painful or impossible to reverse.
 
@@ -530,9 +530,9 @@ Ordered by how likely each is to cost you the gate.
 partial credit, and it depends on a chain that each fail in unfamiliar ways: the
 `firebase.json` public directory and SPA rewrite, the production hostname in Authorized
 domains, Google OAuth verified from a non-owner account, and index.html caching (R12).
-Each is a 5-minute task and a 90-minute debugging session. Attempting them in sequence at
-hour 20 is the single most common way this class of project fails. *Mitigation:* §4.6, in
-hour 1, before any feature code.
+Each is a 5-minute task and a 90-minute debugging session. Attempting them in sequence once
+the build is otherwise finished is the single most common way this class of project fails.
+*Mitigation:* §4.6, first, before any feature code.
 
 **R2 — Sessions keyed by uid.** Firebase Auth persistence is shared across all tabs of a
 browser profile, so two tabs have the same uid. At `/sessions/{uid}` this means two tabs
@@ -566,10 +566,10 @@ which would otherwise white-screen the app forever.
 now doubled because there are two rulesets. A database in locked mode denies everything and
 you spend 45 minutes suspecting Konva. Test mode works but expires. And `firebase init`
 scaffolds local rule files that `firebase deploy` pushes over whatever you edited in the
-console — the classic hour-22 story where everything 403s and the deploy itself is the last
-thing you suspect. **You are running `firebase init` for hosting and emulators regardless,
-so this trap is now unavoidable rather than optional.** *Mitigation:* console in hour 1,
-then immediately copy both rulesets into `firestore.rules` and `database.rules.json` and
+console — the classic late-stage story where everything 403s and the deploy itself is the
+last thing you suspect. **You are running `firebase init` for hosting and emulators
+regardless, so this trap is now unavoidable rather than optional.** *Mitigation:* console
+during setup, then immediately copy both rulesets into `firestore.rules` and `database.rules.json` and
 treat the files as the single source of truth. Flags differ: `--only firestore:rules` and
 `--only database`.
 
@@ -596,14 +596,14 @@ cursor layer; `perfectDrawEnabled={false}` and `shadowForStrokeEnabled={false}` 
 failures with one signature — works for you, 403s for everyone else, while email/password
 keeps working so your smoke test passes. (a) The deployed hostname missing from Authorized
 domains → `auth/unauthorized-domain`; `localhost` is *not* authorized by default in
-projects created after 2025-04-28, so this bites in hour 1 too. (b) If the project was
-created under a Google Workspace account, the OAuth consent audience defaults to
+projects created after 2025-04-28, so this bites during local development too. (b) If the
+project was created under a Google Workspace account, the OAuth consent audience defaults to
 **Internal** and every grader with a personal Gmail gets `Error 403 org_internal` — and a
 project inside a Workspace org may have External greyed out by policy, which is not a
-console click to unwind at hour 22. (c) An External app left in **Testing** admits only 100
-explicitly listed users. *Mitigation:* personal @gmail.com in the first 15 minutes; verify
+console click to unwind. (c) An External app left in **Testing** admits only 100
+explicitly listed users. *Mitigation:* personal @gmail.com from the very start; verify
 Audience = External and Publishing = In production; sign in to the **production** URL from
-a non-owner account before hour 12.
+a non-owner account well before the gate.
 
 ### High
 
@@ -641,7 +641,7 @@ sites — undocumented, but currently reproducible. Redeploying purges the CDN b
 already-populated browser caches, so a grader who loaded the page earlier gets the stale
 shell — and because that HTML references purged hashed asset filenames, the usual result is
 a **blank white screen**, not merely an old version. *Mitigation:* set
-`Cache-Control: no-cache` on `**/*.html` in the `firebase.json` headers block on day 1.
+`Cache-Control: no-cache` on `**/*.html` in the `firebase.json` headers block from the start.
 Two adjacent traps in the same file: `firebase init hosting` defaults the public directory
 to `public`, not Vite's `dist`, and the SPA rewrite question must be answered yes — get
 either wrong and you deploy the Firebase welcome page.
@@ -657,7 +657,7 @@ minutes of confused debugging if not.
 **R14 — Two Spark meters, two different failure modes, no safety valve.** Firestore's daily
 op quotas reset at midnight — blowing them costs a day. RTDB's bandwidth is metered
 *monthly* and blowing it shuts the database off for the **remainder of the calendar month**,
-for the whole project, which is unrecoverable in a one-week sprint. With billing
+for the whole project, with no recovery before the month rolls over. With billing
 deliberately not enabled (Decision 6) there is no option to pay through either. This is the
 one risk whose *only* defence is discipline — every other critical risk has a code fix.
 *Mitigation:* keep drag deltas off Firestore (§4.2); treat §4.5's conservation measures as
@@ -694,11 +694,11 @@ sessionId, and **fail open** — a ghost is a blemish, an empty list is a failed
 `konva` separately. If the Vite template scaffolds 19.0.x or 19.1.x you get peer warnings
 and possibly a duplicate React copy, surfacing as an opaque reconciler error or "Invalid
 hook call" the moment you render a `<Stage>`. Forgetting to install `konva` alongside is the
-other common failure. This is the most likely thing to eat hour 1. *Mitigation:* pin
-react/react-dom to ^19.2.0 and install konva explicitly; render one hardcoded blue `<Rect>`
-and confirm it paints before writing any Firebase code. Also set `noUnusedLocals` and
-`noUnusedParameters` to false in tsconfig **now** — the template's `tsc -b && vite build`
-refuses to emit after twenty hours of refactoring leaves unused imports.
+other common failure. This is the most likely thing to stall you at the very start.
+*Mitigation:* pin react/react-dom to ^19.2.0 and install konva explicitly; render one
+hardcoded blue `<Rect>` and confirm it paints before writing any Firebase code. Also set
+`noUnusedLocals` and `noUnusedParameters` to false in tsconfig **now** — the template's
+`tsc -b && vite build` refuses to emit once refactoring leaves unused imports behind.
 
 **R19 — Sign-out leaves a ghost user and a permission-denied storm.** `signOut(auth)`
 doesn't close the RTDB websocket, so `onDisconnect` doesn't fire and you remain "online" to
@@ -758,7 +758,7 @@ writes — 500 transactions against one document would serialize and take minute
 
 ## 6. Out of Scope for MVP
 
-### Deferred — Phase 2 (Friday / Sunday)
+### Deferred — Phase 2
 - **AI canvas agent** — the entire natural-language feature, tool schema, 6+ commands,
   complex multi-step plans. This is the second half of the project; the MVP is explicitly
   the infrastructure half. It needs a server-side endpoint to hold an LLM API key; **where
@@ -833,8 +833,8 @@ maps to a risk in §5 that passes a naive test.
 
 ## 8. Decisions Log
 
-Recorded so the reasoning survives contact with hour 20, when every one of these will feel
-worth reopening.
+Recorded so the reasoning survives the late stretch of the build, when every one of these
+will feel worth reopening.
 
 | # | Decision | Resolution |
 |---|---|---|
@@ -855,7 +855,7 @@ satisfy gate 6 for a closed laptop lid without a Cloud Function, which the free 
 deploy. See §4.2 for the full argument and the three costs of the single-document design.
 
 **2. Email + password *and* Google OAuth.** Both ship. Email/password is the fallback that
-always works; Google is one click. Two paths also means one auth method failing on demo day
+always works; Google is one click. Two paths also means one auth method failing during a demo
 is an inconvenience rather than a gate failure. Firebase does not gate sign-in on email
 verification.
 
@@ -863,7 +863,7 @@ verification.
 additional credit and adds a shape-type branch to every code path the sync layer touches.
 
 **4. Click-to-place, fixed size.** Drag-to-size feels more finished but adds a
-gesture-state machine competing for the same mouse events — a genuine source of hour-19
+gesture-state machine competing for the same mouse events — a genuine source of late-stage
 bugs for cosmetic gain. See R13.
 
 **5. One global canvas, 5,000 × 5,000.** No rooms, no routing, no join flow. The evaluator
@@ -896,7 +896,7 @@ occupies costs nothing. Confirm or overrule.
 Every numeric and behavioral claim above was checked against official documentation by two
 independent fact-checking passes. These could **not** be confirmed. They're listed because
 a confidently-stated wrong number is worse than an admitted unknown when you're building a
-24-hour schedule around it.
+schedule around it.
 
 **Contradicted at the source.** Firebase's pricing page shows "50K MAUs" for Spark Auth,
 while its auth limits page shows "Tier 1 Daily Active Users: 3000 per day." Both are
@@ -911,12 +911,12 @@ undocumented. Similarly: test-mode's "~30 day" expiry (mechanism real, length un
 Firebase Hosting's `max-age=3600` on index.html (R12 — empirically reproduced twice in
 independent sessions, not documented anywhere, so set the header explicitly rather than
 relying on knowing the default); and `auth/too-many-requests`, which triggers on repeated
-*failed* sign-ins — i.e. by you at hour 21 iterating on the login form.
+*failed* sign-ins — i.e. by you, iterating on the login form.
 
 **Estimated, and it propagates.** Per-message RTDB wire size drives *all* the bandwidth
 arithmetic in §4.5. Two research passes disagreed (120 B vs 150–250 B) and neither figure
-is documented. The 2–3 GB week projection could be off by ~2× in either direction. Measure
-it on day 2 from the console Usage tab rather than trusting the model. The ~150 B/shape
+is documented. The 2–3 GB projection could be off by ~2× in either direction. Measure
+it early from the console Usage tab rather than trusting the model. The ~150 B/shape
 figure behind R24's 6,500-shape ceiling is likewise an estimate.
 
 **Mechanism unconfirmed, prescription still correct.** The claim that `onDisconnect`
@@ -931,7 +931,7 @@ made the Firestore case moot, so these were never checked as closely as the RTDB
 the exact fan-out read accounting for `onSnapshot` on a single document with N listeners
 (the §4.5 arithmetic assumes 1 read per listener per change), transaction retry limits, and
 whether the 1 MiB document ceiling is measured before or after field-name overhead.
-**Measure the read counter on day 2** rather than trusting §4.5. Separately, the widely-cited
+**Measure the read counter early** rather than trusting §4.5. Separately, the widely-cited
 "~1 sustained write/sec per Firestore document" limit **is no longer in Firebase's
 documentation** — two fact-check passes confirmed its absence across four official pages.
 Contention on a single document is still real; the published number is not.
@@ -941,7 +941,7 @@ non-sensitive scopes — the load-bearing premise under "a grader won't see an u
 screen," and no official page classifying them was found. Verify with a non-owner Google
 account before the gate. That Firebase Hosting's default domains are pre-authorized: the
 help page says only "localhost and your Firebase project's hosting domain," singular, and
-predates the April 2025 localhost removal — **read the console list on hour 1 rather than
+predates the April 2025 localhost removal — **read the console list during setup rather than
 assuming a two-entry default.**
 
 **Untested.** No verification session ran the Firebase Emulator Suite on this machine, and

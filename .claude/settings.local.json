@@ -54,7 +54,16 @@
       "Bash(cp /Users/zed/Desktop/collabcanvas/ARCHITECTURE.md /private/tmp/claude-501/-Users-zed-Desktop-collabcanvas/9f199c10-dd6e-4d70-95bb-995839f79ec4/scratchpad/mmd/user.mmd)",
       "Bash(cp /Users/zed/Desktop/collabcanvas/ARCHITECTURE.md /private/tmp/claude-501/-Users-zed-Desktop-collabcanvas/9f199c10-dd6e-4d70-95bb-995839f79ec4/scratchpad/mmd/user2.mmd)",
       "Bash(rm -f user2.png)",
-      "Bash(npx -y -p @mermaid-js/mermaid-cli@latest mmdc -i user2.mmd -o user2.png -w 2400 -b white)"
+      "Bash(npx -y -p @mermaid-js/mermaid-cli@latest mmdc -i user2.mmd -o user2.png -w 2400 -b white)",
+      "Bash(echo \"--- exit: $? ---\")",
+      "Bash(command -v fff)",
+      "Bash(echo \"which-exit:$?\")",
+      "Read(//Users/zed/.claude/**)",
+      "Bash(command -v fff ff fff-search)",
+      "Read(//Users/zed/**)",
+      "Bash(echo \"exit:$?\")",
+      "Read(//usr/local/Cellar/fff-mcp/0.10.1/bin/**)",
+      "mcp__fff__grep"
     ]
   }
 }

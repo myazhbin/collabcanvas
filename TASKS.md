@@ -28,7 +28,7 @@ scenarios. **Requires a JRE — run `java -version` before committing to this.**
 Firebase SDK behaviour itself, and real `onDisconnect` timing — that last one needs a real
 socket and belongs to PR 11's manual pass.
 
-**Tiers**, because the schedule no longer has slack:
+**Tiers**, because not every test earns its cost:
 
 | Tier | What | Cost | Rule |
 |---|---|---|---|
@@ -142,20 +142,18 @@ Firestore**, which is the only cheap way to verify R23.
 
 Ordering is load-bearing (PRD §4.6). Several steps are painful or impossible to reverse.
 
-- [ ] `java -version` — if absent, **skip Tier 3 entirely** rather than installing a JDK
-      at hour 3
-- [ ] Create the Firebase project with a **personal @gmail.com**, not a Workspace/school
+- [x] Create the Firebase project with a **personal @gmail.com**, not a Workspace/school
       account `[R8]`
-- [ ] **Provision RTDB first**, region `us-central1` — before registering the web app, or
+- [x] **Provision RTDB first**, region `us-central1` — before registering the web app, or
       `databaseURL` is missing from the config `[R15]`
-- [ ] **Provision Firestore in production mode** — never test mode `[R5]`
-- [ ] Register the web app; copy the config object
-- [ ] Enable **both** Email/Password and Google providers `[R8]`
-- [ ] Authorized domains: **read the list**, add `localhost` if missing (not present by
+- [x] **Provision Firestore in production mode** — never test mode `[R5]`
+- [x] Register the web app; copy the config object
+- [x] Enable **both** Email/Password and Google providers `[R8]`
+- [x] Authorized domains: **read the list**, add `localhost` if missing (not present by
       default since 2025-04-28), and don't assume the hosting domains are there `[R8]`
-- [ ] Google Cloud Console → Audience = **External**, Publishing = **In production** `[R8]`
-- [ ] Paste **both** rulesets from PRD §4.4 and Publish `[R5]`
-- [ ] **Stay on Spark — do not enable billing** (Decision 6). Bookmark **both** Usage tabs,
+- [x] Google Cloud Console → Audience = **External**, Publishing = **In production** `[R8]`
+- [x] Paste **both** rulesets from PRD §4.4 and Publish `[R5]`
+- [x] **Stay on Spark — do not enable billing** (Decision 6). Bookmark **both** Usage tabs,
       Firestore and Realtime Database. Firestore blowing up costs a day; RTDB blowing up
       costs the rest of the calendar month `[R14]`
 
@@ -164,7 +162,7 @@ Ordering is load-bearing (PRD §4.6). Several steps are painful or impossible to
 ## PR 1 — Scaffold, Konva smoke test, first deploy
 **Closes gate 8** · **~1.75h** · `feat: scaffold vite+react+konva+vitest, deploy to firebase hosting`
 
-Hit production in hour 1, not hour 20 `[R1]`.
+Hit production first, before any feature code `[R1]`.
 
 **Files:** `+package.json` `+tsconfig.json` `+tsconfig.app.json` `+vite.config.ts`
 `+index.html` `+firebase.json` `+.firebaserc` `+src/main.tsx` `+src/App.tsx`
@@ -172,11 +170,13 @@ Hit production in hour 1, not hour 20 `[R1]`.
 
 - [ ] `npm create vite@latest` → React + TypeScript
 - [ ] **Pin `react` and `react-dom` to `^19.2.0`**, install `konva` explicitly alongside
-      `react-konva` — peer mismatch is the most likely thing to eat hour 1 `[R18]`
+      `react-konva` — peer mismatch is the most likely thing to stall you at the very
+      start `[R18]`
 - [ ] Pin the Vite major explicitly (latest is 8.x)
 - [ ] Install Tailwind; wire the entry into `src/index.css`
 - [ ] `~tsconfig.app.json` — `noUnusedLocals: false`, `noUnusedParameters: false` **now**,
-      or `tsc -b && vite build` refuses to emit at hour 20 `[R18]`
+      or `tsc -b && vite build` refuses to emit once refactoring leaves unused imports
+      behind `[R18]`
 - [ ] Render one hardcoded blue `<Rect>` in a `<Stage>` and confirm it paints **before**
       touching Firebase `[R18]`
 - [ ] `firebase init hosting` — **public directory `dist`, not the default `public`**, and
@@ -643,18 +643,20 @@ behaviour — genuinely not unit-testable, and correctly left to PR 11.
 | 10 — Grader affordances | 1.6h | +0.08h | 23.74h |
 | 11 — Acceptance pass | 2h | — | **25.74h** |
 
-### ⚠️ This no longer fits in 24 hours
+### ⚠️ The plan has grown
 
-Tier 1 + Tier 2 alone is **~25.75h against a 24h gate** — and that is *before* Tier 3's
-1.5h of emulator setup, which would put it at 27.25h.
+Tier 1 + Tier 2 alone is **~25.75h** — and that is *before* Tier 3's 1.5h of emulator
+setup, which would put it at 27.25h.
 
 The architecture change costs roughly **2–3 hours** over the previous plan, concentrated in
 three places: PR 8 grew (transactions + array diff + the two-channel drag handoff), PR 2
 grew (two rulesets, emulator scaffolding), and Phase 0 grew (a second database to provision).
-None of that is waste — the transaction is genuinely required — but the budget is now
-negative and pretending otherwise would just move the discovery to hour 22.
+None of that is waste — the transaction is genuinely required — but the total is now large
+enough that the trimming decisions are better made deliberately up front than discovered
+late.
 
-**Cut in this order, and cut early rather than late:**
+**If the estimate outruns the time available, cut in this order — and cut early rather
+than late:**
 
 1. **Tier 3 entirely** (−1.5h) — before it's ever started. Skip automatically if
    `java -version` fails. Coverage for R5 and R23 falls back to manual items 8 and the
@@ -666,7 +668,7 @@ negative and pretending otherwise would just move the discovery to hour 22.
 4. **PR 10's Seed 500 button** (−0.4h) — keep the demo accounts and the seeded shapes,
    which are worth more than everything else in that PR combined.
 
-Taking 1 and 2 lands at **~22.7h**. Taking 1–3 lands at **~22h**, which restores real slack.
+Taking 1 and 2 lands at **~22.7h**. Taking 1–3 lands at **~22h**.
 
 **Never cut:** the deploy in PR 1 `[R1]`, the sessionId keying in PR 5 `[R2]`, the
 transaction wrapper in PR 8 `[R23]`, the four Tier 1 test files, or the acceptance pass in
