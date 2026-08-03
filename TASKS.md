@@ -50,11 +50,14 @@ collabcanvas/
 ├── .firebaserc
 ├── firestore.rules               # PRD §4.4                                             [R5]
 ├── database.rules.json           # PRD §4.4                                             [R5]
+├── .env                          # gitignored — VITE_FIREBASE_* config            [R1 ⚠]
+├── .env.example                  # committed key list; Vercel needs these set      [R1 ⚠]
 ├── index.html
 ├── package.json
 ├── tsconfig.json
 ├── tsconfig.app.json
-├── vite.config.ts                # + vitest `test` block
+├── vite.config.ts                # + vitest `test` block; excludes src/tests
+├── vitest.emulator.config.ts     # Tier 3 only — `bun run test:emulator`          [R5]
 ├── PRD.md
 ├── TASKS.md
 ├── ARCHITECTURE.md
@@ -133,9 +136,15 @@ inside their services. Splitting them out is what makes the test plan fit in an 
 `shapeOps.ts` in particular exists so the **transaction bodies are testable without
 Firestore**, which is the only cheap way to verify R23.
 
-**Deliberately absent:** any Cloud Functions directory, any `.env` (config is hardcoded —
-R1), any Playwright directory. Host configuration is not covered here — deployment is
-handled separately, on Vercel, by the project owner (PRD F9).
+**Deliberately absent:** any Cloud Functions directory, any Playwright directory. Host
+configuration is not covered here — deployment is handled separately, on Vercel, by the
+project owner (PRD F9).
+
+**Changed in PR 2:** the plan called for no `.env` at all, config hardcoded, to delete
+the env-var failure class outright (R1). The build now reads config from a gitignored
+`.env` instead. That trade is live, not theoretical: Vercel builds on its own host, so a
+missing var there produces a **successful build that throws at runtime on the deployed
+URL only**. `.env.example` and the `databaseURL` guard are the mitigations.
 
 ---
 
@@ -182,7 +191,7 @@ owner. Get a URL live early anyway `[R1]`.
       touching Firebase `[R18]`
 - [x] **Set no COOP or cross-origin-isolation headers** anywhere — not in the build, not in
       the host config. It silently breaks `signInWithPopup` in PR 3 `[R20]`
-- [ ] Once a URL is live, confirm that hostname is in Firebase Auth → Authorized domains.
+- [x] Once a URL is live, confirm that hostname is in Firebase Auth → Authorized domains.
       Hosting off Firebase means nothing pre-authorizes it `[R8]`
 
 **🧪 Test setup — Tier 1 · ~15m**
@@ -201,36 +210,57 @@ owner. Get a URL live early anyway `[R1]`.
 **~1.5h** (+1.5h if Tier 3) · `feat: firebase init, firestore + rtdb rules, connection state`
 
 **Files:** `+src/services/firebase.ts` `+src/utils/session.ts` `+src/utils/constants.ts`
-`+src/utils/types.ts` `+firestore.rules` `+database.rules.json` `~src/App.tsx`
+`+src/utils/types.ts` `+firestore.rules` `+database.rules.json` `+.env` `+.env.example`
+`~src/App.tsx` `~firebase.json`
 
-- [ ] `firebase.ts` — `initializeApp`, `getAuth`, `getFirestore`, `getDatabase`.
-      **Hardcode the config**; the web API key is public by design and this deletes the
-      entire env-var failure class `[R1]`
-- [ ] Assert `databaseURL` is present at startup and throw a legible error if not `[R15]`
-- [ ] `session.ts` — `export const sessionId = crypto.randomUUID()` at module level, so
+- [x] `firebase.ts` — `initializeApp`, `getAuth`, `getFirestore`, `getDatabase`.
+      ~~**Hardcode the config**~~ **Superseded:** config reads from a gitignored `.env`
+      via `import.meta.env`, with `.env.example` committed. This reopens the env-var
+      failure class R1 exists to close — Vercel builds remotely, so the eight
+      `VITE_FIREBASE_*` vars must be set in its dashboard or the build succeeds and the
+      app throws only on the deployed URL. The `databaseURL` guard below is what makes
+      that legible instead of a blank page `[R1]`
+- [x] Assert `databaseURL` is present at startup and throw a legible error if not `[R15]`
+- [x] `session.ts` — `export const sessionId = crypto.randomUUID()` at module level, so
       it's once per tab `[R2]`
-- [ ] `constants.ts` — 10000×10000 canvas, 120×80 shape, palette, 50 ms throttle
-- [ ] `types.ts` — `Shape`, `SessionNode`, `CanvasDoc` matching PRD §4.3
-- [ ] Commit **both** rulesets to `firestore.rules` and `database.rules.json`, matching
+- [x] `constants.ts` — 10000×10000 canvas, 120×80 shape, palette, 50 ms throttle
+- [x] `types.ts` — `Shape`, `SessionNode`, `CanvasDoc` matching PRD §4.3
+- [x] Commit **both** rulesets to `firestore.rules` and `database.rules.json`, matching
       what you pasted into the console. **From this moment the files are the source of
       truth** — `firebase deploy` will push them over the console `[R5]`
-- [ ] Subscribe to `.info/connected` and `.info/serverTimeOffset`; expose
+- [x] Subscribe to `.info/connected` and `.info/serverTimeOffset`; expose
       `{ connected, offset }` `[R9,R17]`
-- [ ] Temporary: render connection status in the corner to prove the socket works
+- [x] Temporary: render connection status in the corner to prove the socket works
 
-**🧪 `tests/integration/rules.test.ts` — Tier 3 · ~1.5h · only if `java` exists**
+**🧪 `src/tests/integration/rules.test.ts` — Tier 3 · ~1.5h — ✅ done, 4/4 green**
 
-- [ ] `npm i -D @firebase/rules-unit-testing firebase-tools`; `firebase init emulators`
-      for Auth + Firestore + RTDB
-- [ ] Point the emulators at the **committed** rule files, not the console
-- [ ] Firestore: unauthenticated read of `canvas/global-canvas-v1` **denied**
-- [ ] Firestore: authenticated read and write **allowed**
-- [ ] RTDB: authenticated read of `/sessions/global-canvas-v1` — *the parent path you
+Run with `bun run test:emulator`. Needs a JRE (`brew install openjdk`) — the Firestore and
+RTDB emulators are Java processes — so it is excluded from `bun run test`, which stays
+runnable without one. Emulator config lives in `firebase.json`; the run uses project
+`demo-collabcanvas`, a prefix the emulator serves without credentials and which can never
+reach the real project.
+
+- [x] `npm i -D @firebase/rules-unit-testing firebase-tools`; emulators for Auth +
+      Firestore + RTDB *(config written directly into `firebase.json` rather than via the
+      interactive `firebase init emulators` — same result)*
+- [x] Point the emulators at the **committed** rule files, not the console
+- [x] Firestore: unauthenticated read of `canvas/global-canvas-v1` **denied**
+- [x] Firestore: authenticated read and write **allowed**
+- [x] RTDB: authenticated read of `/sessions/global-canvas-v1` — *the parent path you
       actually listen on, not a child* — **allowed** `[R5]`
-- [ ] RTDB: read of an unlisted path (`/admin`) **denied**, proving the top-level `false`
+- [x] RTDB: read of an unlisted path (`/admin`) **denied**, proving the top-level `false`
       default actually defaults `[R5]`
 
-**Done when:** the deployed app logs `connected: true` and a non-null server offset.
+**Both assertions were mutation-tested rather than trusted green.** Loosening
+`firestore.rules` to `if true` failed exactly the unauthenticated-read test; narrowing the
+RTDB grant to `sessions/$canvasId/$sessionId` failed exactly the parent-path test — which
+is R5's actual bug, reproduced and caught. `assertFails` passing vacuously is the standing
+risk with rules tests, and this rules it out.
+
+**Done when:** the deployed app logs `connected: true` and a non-null server offset. ✅
+*Verified locally against the production bundle (`bun run preview`, not just the dev
+server): `connected: true`, offset ~2000 ms — real clock skew, which is what R17's filter
+corrects. Vercel deploy and authorized domains confirmed by the project owner.*
 
 ---
 
@@ -651,9 +681,10 @@ late.
 **If the estimate outruns the time available, cut in this order — and cut early rather
 than late:**
 
-1. **Tier 3 entirely** (−1.5h) — before it's ever started. Skip automatically if
-   `java -version` fails. Coverage for R5 and R23 falls back to manual items 8 and the
-   rules smoke test.
+1. **Tier 3 entirely** (−1.5h) — ~~before it's ever started. Skip automatically if
+   `java -version` fails.~~ **Superseded:** a JRE is installed and PR 2's `rules.test.ts`
+   is done and green, so the setup cost is already paid. Only PR 8's `concurrency.test.ts`
+   remains cuttable here, and it would cost R23 its cheapest automated cover.
 2. **PR 9's memoisation and the 500-object target** (−1.5h). F10 is a stated target, not a
    gate item. Keep the layer separation, which is 10 minutes and prevents the worst case.
 3. **Tier 2 unit tests** (−0.75h) — `placement`, `coords` part 1, `helpers`, `authErrors`,

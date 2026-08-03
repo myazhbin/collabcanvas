@@ -77,7 +77,13 @@
       "Bash(curl -sSI https://collabcanvas-60c5b.web.app/assets/index-aerGBR5Z.js)",
       "Bash(curl -sSI https://collabcanvas-60c5b.web.app/index.html)",
       "Bash(curl -sSI https://collabcanvas-60c5b.web.app/canvas/deep/route)",
-      "mcp__fff__multi_grep"
+      "mcp__fff__multi_grep",
+      "Bash(firebase apps:sdkconfig WEB --project collabcanvas-60c5b)",
+      "Bash(git check-ignore *)",
+      "Bash(echo \"ignored=$?\")",
+      "Bash(grep -c \"^\\\\.env$\")",
+      "Bash(bunx vite *)",
+      "Bash(awk '/^## PR 1/,/^## PR 3/' TASKS.md)"
     ]
   }
 }

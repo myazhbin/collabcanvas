@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Layer, Rect, Stage } from 'react-konva'
+import { connectionStore } from './services/firebase'
+import { sessionId } from './utils/session'
 
 /**
  * PR 1 smoke test [R18]: one hardcoded blue Rect in a Stage, to prove
@@ -13,6 +15,10 @@ import { Layer, Rect, Stage } from 'react-konva'
 function App() {
   const containerRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ width: 0, height: 0 })
+  const { connected, offset } = useSyncExternalStore(
+    connectionStore.subscribe,
+    connectionStore.getSnapshot,
+  )
 
   useEffect(() => {
     const el = containerRef.current
@@ -42,6 +48,11 @@ function App() {
 
       <p className="absolute top-4 left-4 font-mono text-sm text-neutral-500">
         CollabCanvas — konva smoke test
+      </p>
+
+      {/* Temporary PR 2 proof that the socket is up. The Navbar badge replaces it in PR 5. */}
+      <p className="absolute right-4 bottom-4 font-mono text-xs text-neutral-500">
+        connected: {String(connected)} · offset: {offset}ms · session: {sessionId.slice(0, 8)}
       </p>
     </div>
   )

@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config'
+import { configDefaults, defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
@@ -9,5 +9,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
+    // Tier 3 needs live emulators — `bun run test:emulator` runs those separately, so
+    // `bun run test` stays fast and green without a JRE running.
+    exclude: [...configDefaults.exclude, 'src/tests/**'],
   },
 })

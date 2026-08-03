@@ -1,34 +1,12 @@
 {
-  "hosting": {
-    "public": "dist",
-    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-    "rewrites": [
-      {
-        "source": "**",
-        "destination": "/index.html"
-      }
-    ],
-    "headers": [
-      {
-        "//": "Default: treat every path as an HTML shell [R12]. Header globs match the REQUEST PATH, not the resolved file, so `**/*.html` alone misses `/` and every SPA deep route — which is exactly what a grader loads. Verified: `**/*.html` left `/` on Hosting's default max-age=3600.",
-        "source": "**",
-        "headers": [
-          {
-            "key": "Cache-Control",
-            "value": "no-cache"
-          }
-        ]
-      },
-      {
-        "//": "Hashed filenames — safe to cache forever. Must FOLLOW the catch-all: on overlapping globs the last match wins (verified empirically).",
-        "source": "/assets/**",
-        "headers": [
-          {
-            "key": "Cache-Control",
-            "value": "public, max-age=31536000, immutable"
-          }
-        ]
-      }
-    ]
+  "//": "Rules deploy targets only — Vercel does the hosting, so no hosting block here [R5]. The committed rule files are the source of truth from PR 2 on; `firebase deploy` pushes them over whatever is in the console.",
+  "firestore": { "rules": "firestore.rules" },
+  "database": { "rules": "database.rules.json" },
+  "emulators": {
+    "auth": { "port": 9099 },
+    "firestore": { "port": 8080 },
+    "database": { "port": 9000 },
+    "ui": { "enabled": false },
+    "singleProjectMode": true
   }
 }

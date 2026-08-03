@@ -19,5 +19,8 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["vite.config.ts"]
+  /* `src/tests` lives here, not in the app project: the emulator tests are Node code
+     that reads the rule files off disk, and the app project deliberately carries only
+     `vite/client` types. */
+  "include": ["vite.config.ts", "vitest.emulator.config.ts", "src/tests"]
 }
