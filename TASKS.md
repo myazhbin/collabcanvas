@@ -265,7 +265,7 @@ corrects. Vercel deploy and authorized domains confirmed by the project owner.*
 ---
 
 ## PR 3 — Authentication
-**Closes gate 7** · **~3.3h** · `feat: email/password + google auth with three-state gate`
+`feat: email/password + google auth with three-state gate`
 
 The highest-risk PR in the build. Five separate risks live here.
 
