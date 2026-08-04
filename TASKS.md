@@ -803,77 +803,226 @@ The core of the project, and the densest test target. Three critical risks conve
 and every one of them is invisible until a second browser is open.
 
 **Files:** `+src/services/canvasService.ts` `+src/services/transactionService.ts`
-`+src/hooks/useCanvas.ts` `+src/utils/shapeOps.ts` `+src/utils/shapeDiff.ts`
-`+src/utils/shapeLocks.ts` `~src/contexts/CanvasContext.tsx`
-`~src/components/canvas/Rectangle.tsx` `~src/services/cursorService.ts`
+`+src/utils/shapeOps.ts` `+src/utils/shapeDiff.ts` `+src/utils/shapeLocks.ts`
+(each with a `.test.ts`) `+src/tests/integration/concurrency.test.ts`
+`+src/tests/integration/dragChannel.test.ts` `~src/contexts/CanvasContext.tsx`
+`~src/components/canvas/Rectangle.tsx` `~src/components/canvas/Canvas.tsx`
+`~src/services/cursorService.ts`
 
 **Durable path — Firestore, transactional**
-- [ ] `shapeOps.ts` — **pure** transaction bodies: `addShape(shapes, s)`,
+- [x] `shapeOps.ts` — **pure** transaction bodies: `addShape(shapes, s)`,
       `patchShape(shapes, id, fields)`, `removeShape(shapes, id)`, `claimLock`,
-      `releaseLock`. Each takes the current array and returns the next one
-- [ ] `transactionService.ts` — `runTransaction` wrapper calling those pure bodies.
+      `releaseLock`. Each takes the current array and returns the next one.
+      *Plus `commitPosition` and `releaseAllLocks` — see the lockout note below.*
+- [x] `transactionService.ts` — `runTransaction` wrapper calling those pure bodies.
       **The callback must have no side effects** — Firestore re-runs it under contention `[R23]`
-- [ ] `canvasService.ts` — create / commit-position / delete / lock, **every one through
+- [x] `canvasService.ts` — create / commit-position / delete / lock, **every one through
       the transaction wrapper**. A plain `updateDoc` of the array means two users editing
       different rectangles clobber each other `[R23]`
-- [ ] `.catch` on every transaction — an exhausted retry otherwise looks like a silent
+- [x] `.catch` on every transaction — an exhausted retry otherwise looks like a silent
       no-op `[R23]`
-- [ ] `useCanvas.ts` — `onSnapshot` on the single canvas document
+- [x] ~~`useCanvas.ts`~~ — `onSnapshot` on the single canvas document. *Landed in
+      `CanvasProvider`, not the hook: the provider owns the subscription and `useCanvas`
+      stays a reader, mirroring `AuthContext`/`useAuth`. Keyed on `user?.uid`, never
+      `[]` `[R4]`.*
 
 **Array diff — the R7 mitigation**
-- [ ] `shapeDiff.ts` — **pure** diff of incoming array vs. previous state, keyed by id,
+- [x] `shapeDiff.ts` — **pure** diff of incoming array vs. previous state, keyed by id,
       **reusing previous object references for unchanged shapes** and skipping ids in the
       dragging set
 
-**In-flight drag — RTDB session node** *(per PRD Decision 9 — confirm before building)*
-- [ ] On dragstart: claim `draggedBy` transactionally, add the id to the local dragging Set
-- [ ] While dragging: throttled `drag: {id, x, y}` onto the session node at 20 Hz —
+**In-flight drag — RTDB session node** *(PRD Decision 9 — ✅ **confirmed**, streaming)*
+- [x] On dragstart: claim `draggedBy` transactionally, add the id to the local dragging Set
+- [x] While dragging: throttled `drag: {id, x, y}` onto the session node at 20 Hz —
       **never to Firestore**, which would exhaust 20k writes/day in ~17 min `[R14]`
-- [ ] Remote render: `session.drag` for that id if present, else the Firestore value
-- [ ] On dragend: one transactional Firestore commit, **then** clear `drag` on the session
+- [x] Remote render: `session.drag` for that id if present, else the Firestore value
+- [x] On dragend: one transactional Firestore commit, **then** clear `drag` on the session
       node — clearing first makes the rectangle visibly snap backward for a frame
-- [ ] Release the id from the dragging Set only **after** the transaction resolves `[R6]`
-- [ ] `shapeLocks.ts` — **pure** `canDrag(shape, myUid)`; coloured outline on held
+- [x] Release the id from the dragging Set only **after** the transaction resolves `[R6]`
+- [x] `shapeLocks.ts` — **pure** `canDrag(shape, myUid)`; coloured outline on held
       shapes `[R10]`
-- [ ] `onDisconnect` clears the session node, so a crash can't lock a shape forever `[R10]`
-- [ ] `visibilitychange` clears `draggedBy` `[R16]`
+- [x] `onDisconnect` clears the session node, so a crash can't lock a shape forever `[R10]`.
+      *This needed more than the existing `onDisconnect` — see the stale-lock note below.*
+- [x] `visibilitychange` clears `draggedBy` `[R16]` — the RTDB half in the drag channel,
+      the Firestore half in `CanvasProvider`
 
-**🧪 `shapeDiff.test.ts` — Tier 1 · ~20m** — the most valuable test file here. Every
-assertion maps to a bug that looks like "sync is broken."
-- [ ] An unchanged shape keeps its **exact previous object reference** — this is what lets
+### Three things the checklist doesn't name
+
+**1 — A commit costs one write, not two.** Position and lock release go in a *single*
+transaction. `updatedAt` is stamped **outside** the body, because calling `Date.now()`
+inside would make it non-deterministic across the retries Firestore performs under
+contention — and a deterministic body is exactly what `shapeOps.test.ts` verifies `[R23]`.
+
+**2 — The lockout is authoritative, not advisory.** `draggable` on the Konva node is the
+guard a user feels, but it derives from state that can be briefly stale (presence not
+loaded, two claims crossing on the wire). So `commitPosition` *itself* refuses to write
+when someone else holds the lock. Without that the loser of a contested grab still commits
+on release, and F4's "clean lockout" degrades into the oscillation the lock exists to
+prevent `[R10]`. A refused claim also drops the id from the dragging set immediately, so
+the holder's in-flight position renders instead of a dead-end local drag.
+
+**3 — `onDisconnect` alone cannot free a lock.** `draggedBy` lives in **Firestore**, which
+`onDisconnect` cannot reach — it only removes the RTDB session node. A client that crashes,
+loses power, or has its lid closed mid-drag would leave a rectangle nobody can ever move
+again. The session node vanishing *is* the signal: `canDrag` treats a lock whose holder has
+no live session as free. That is the actual mechanism by which `onDisconnect` prevents a
+permanent lock — the RTDB node is the liveness proof for a lock held in Firestore. It fails
+**closed** when liveness is unknown, so presence not having loaded yet never unlocks
+anything.
+
+**🧪 `shapeDiff.test.ts` — Tier 1 · ~20m — ✅ done, 14/14 green** — the most valuable test
+file here. Every assertion maps to a bug that looks like "sync is broken."
+- [x] An unchanged shape keeps its **exact previous object reference** — this is what lets
       a memoised `Rectangle` skip re-rendering, and it is the difference between 60 FPS and
       6 at 500 objects `[R7]`
-- [ ] A changed shape produces a new reference; **every other entry is untouched** `[R7]`
-- [ ] Additions and removals are detected from the array alone (no per-shape events exist)
-- [ ] **A changed shape whose id is in the dragging set is IGNORED** — echo suppression.
+- [x] A changed shape produces a new reference; **every other entry is untouched** `[R7]`
+- [x] Additions and removals are detected from the array alone (no per-shape events exist)
+- [x] **A changed shape whose id is in the dragging set is IGNORED** — echo suppression.
       Without it your own commit fights your pointer `[R6]`
-- [ ] **A removed shape clears its id from the dragging set** — otherwise a shape deleted
+- [x] **A removed shape clears its id from the dragging set** — otherwise a shape deleted
       mid-drag stays permanently suppressed `[R6]`
-- [ ] A 500-shape array with one change produces 499 reused references
+- [x] A 500-shape array with one change produces 499 reused references
+- [x] *Added:* a **reorder** of otherwise-identical shapes is detected — a diff keyed only
+      on membership reports "nothing changed" and the canvas keeps a stale z-order
+- [x] *Added:* the dragging set handed in is never mutated, and comes back as the **same
+      reference** when no dragged id disappeared
+- [x] *Added:* `collectRemoteDrags` — maps shape id → live position, **excludes your own
+      session** (Konva already owns that node; rendering it from the wire adds a round trip
+      to your own hand), and drops `NaN`/`Infinity`/malformed payloads
 
-**🧪 `shapeOps.test.ts` — Tier 1 · ~15m** — verifies the transaction bodies without
-Firestore, which is the only cheap way to cover R23.
-- [ ] Each op **returns a new array and never mutates the input** — a mutating body
+**🧪 `shapeOps.test.ts` — Tier 1 · ~15m — ✅ done, 16/16 green** — verifies the transaction
+bodies without Firestore, which is the only cheap way to cover R23.
+- [x] Each op **returns a new array and never mutates the input** — a mutating body
       corrupts state when Firestore re-runs the callback `[R23]`
-- [ ] `patchShape` on a missing id is a safe no-op, not a crash (delete-during-drag)
-- [ ] `addShape` twice with the same id doesn't duplicate — the retry case `[R23]`
-- [ ] Ops are **idempotent**: applying the same op twice equals applying it once `[R23]`
-- [ ] `claimLock` on a shape already held by another uid leaves it unchanged `[R10]`
+- [x] `patchShape` on a missing id is a safe no-op, not a crash (delete-during-drag)
+- [x] `addShape` twice with the same id doesn't duplicate — the retry case `[R23]`
+- [x] Ops are **idempotent**: applying the same op twice equals applying it once `[R23]`
+- [x] `claimLock` on a shape already held by another uid leaves it unchanged `[R10]`
+- [x] *Added:* every op returns the **same array reference** on a no-op, which is what lets
+      the wrapper skip the write entirely — a refused lock claim must not cost a
+      Firestore write `[R14]`
+- [x] *Added:* re-claiming your **own** lock succeeds — a retry mid-drag otherwise locks
+      you out of the shape you are holding
+- [x] *Added:* `commitPosition` **refuses** to write when another uid holds the lock
 
-**🧪 `shapeLocks.test.ts` — Tier 2 · ~3m**
-- [ ] `draggedBy` null/absent → draggable by anyone
-- [ ] `draggedBy === myUid` → draggable (your own claim never locks you out — a real bug if
+**🧪 `shapeLocks.test.ts` — Tier 2 · ~3m — ✅ done, 11/11 green**
+- [x] `draggedBy` null/absent → draggable by anyone
+- [x] `draggedBy === myUid` → draggable (your own claim never locks you out — a real bug if
       written as a bare truthiness check) `[R10]`
-- [ ] `draggedBy === otherUid` → not draggable `[R10]`
+- [x] `draggedBy === otherUid` → not draggable `[R10]`
+- [x] *Added:* a lock whose holder has **no live session** is free `[R10]`, and liveness
+      being *unknown* still honours the lock — failing open there would unlock the whole
+      canvas for the moment before presence loads
 
-**🧪 `tests/integration/concurrency.test.ts` — Tier 3 · ~30m · emulator**
-- [ ] Two clients commit **different** shapes concurrently → **both survive**. This is the
+**🧪 `tests/integration/concurrency.test.ts` — Tier 3 · ~30m · emulator — ✅ done, 6/6
+green** (`bun run test:emulator`, 10/10 with PR 2's rules tests)
+- [x] Two clients commit **different** shapes concurrently → **both survive**. This is the
       transaction earning its place, and it's acceptance item 8 `[R23]`
-- [ ] The same test with a plain `updateDoc` loses one write — worth writing once to see it
-      fail, then deleting
+- [x] The same test with a plain `updateDoc` loses one write. **Kept, not deleted** — it
+      passes by *reproducing* the bug, and it is the only direct evidence that Decision 8
+      is load-bearing rather than defensive habit. Alice's write vanishes exactly as
+      predicted.
+- [x] *Added:* two clients creating different shapes concurrently; a burst of ten
+      concurrent creates all surviving; two clients grabbing the **same** rectangle
+      yielding exactly one holder; and the loser's commit being refused rather than
+      clobbering the holder `[R10]`
 
 **Done when:** two users dragging different rectangles both keep their changes, and two
 users grabbing the same rectangle produce a clean lockout rather than oscillation.
+
+*Unit layer: `bun run test` **96/96** (52 → 96). Emulator layer: `bun run test:emulator`
+**16/16**. `tsc -b && vite build` and `oxlint` clean.*
+
+**🧪 `tests/integration/dragChannel.test.ts` — Tier 3, added** — `throttle.test.ts` covers
+the send rate and `shapeDiff.test.ts` covers the mapping, but both work on values in
+memory. Neither shows that the two halves **agree across the wire**: that the payload
+`startDragChannel` writes is the payload `collectRemoteDrags` reads back, under the
+committed RTDB rules, on the parent path a client actually listens on. That seam is where a
+refactor breaks things silently, because each side keeps passing its own unit tests.
+- [x] A drag written by one tab is readable by the other, at the right position
+- [x] The writer does **not** see its own drag
+- [x] Clearing on release deletes the key rather than storing a literal `null`
+- [x] **The identity written at announce survives a drag update untouched** — proof that
+      `update` patches one key instead of replacing the node, which is the whole reason
+      cursor and drag can share the presence node
+- [x] Two tabs dragging different shapes are both visible to a third reader
+- [x] A departed tab takes its in-flight drag with it `[R10]`
+
+**Done when — verified live, two browsers, two accounts** (`ab` and `kitty`):
+
+| Check | Result |
+|---|---|
+| Shape created in one tab | appears in the other |
+| **In-flight handoff**, mid-drag | observer rendered **y = 4100** (RTDB) while Firestore still held **4660** — PRD §4.3 exactly |
+| Lock, mid-drag | observer's node `draggable: false`, dashed outline in the holder's colour `#db2777` |
+| Untouched shape, mid-drag | Firestore position, draggable, no outline — nothing over-applied |
+| Release | committed **4100**, lock cleared, observer falls back to Firestore with **no snap-back** |
+| Dragging-set release | only **after** the transaction resolved `[R6]` |
+| **Two users, different rectangles** | **both survived** — 4600 and 5900. Acceptance item 8 |
+| **Two users, same rectangle** | **clean lockout at all three layers** — see below |
+
+The same-rectangle test bypassed the UI guard deliberately, to prove the lockout is not
+merely cosmetic: `draggable` was `false` for the second user, the transactional claim was
+**refused** and its id dropped from the dragging set, and the refused user's release to
+(9000, 9000) **did not move the shape at all**. That is the difference between a clean
+lockout and oscillation.
+
+### ⚠️ R5 fired a second time — the deployed Firestore rules did not match either
+
+Same shape as PR 5, other database. Every write came back `permission-denied` while
+`firestore.rules` plainly allowed `read, write: if request.auth != null`. **PR 8 is the
+first code in the project to write to Firestore at all** — PRs 2–4 only read `.info/*`,
+PR 5–6 were RTDB, and PR 7 was deliberately local-only — so the console's Firestore rules
+had never once been exercised. Fixed with `bunx firebase deploy --only firestore:rules`,
+the mechanism PR 2 designated when it made the committed files the source of truth.
+
+**Both rulesets have now drifted, and both were caught only by the first code to touch
+them.** The emulator tests could not have caught either, because they test the file. The
+standing lesson for PR 11: deploy both rulesets before the acceptance pass, not after.
+
+### The bug that made the canvas look completely broken: setState inside a setState updater
+
+Every snapshot was silently dropped. Transactions returned `ok: true, applied: true`, the
+document genuinely held three shapes, and Konva rendered **zero** — no error, no warning,
+nothing in the network tab to suggest a problem.
+
+The snapshot handler called `setDragging(...)` **inside** the `setShapes(previous => ...)`
+updater. React invokes updaters during render — twice under StrictMode, deliberately — so
+that is a state update to one component while rendering another, and the update is
+discarded. The diff now runs in the callback body against a `shapesRef`, with both
+setStates called as siblings.
+
+**This is the third instance of the same failure class in this build**, and worth stating
+as a rule rather than three anecdotes: PR 4 flipped a ref inside an updater and opened the
+canvas on the wrong corner; PR 5 hit the ordering version of it in the presence chain; this
+one dropped every remote change. **Nothing that touches state, refs, or other components
+may live inside a state updater** — updaters must be pure functions of `previous`. All
+three survived every unit test, and all three presented as something else entirely.
+
+### Follow-up — shapes could be dragged out of the world and lost
+
+Reported after the pass above: a shape could be dropped anywhere, including outside the
+10,000 × 10,000 world. That is not merely untidy — `clampViewport` will not let the
+viewport travel past the edge, so an out-of-bounds shape renders nowhere and can never be
+selected, moved or deleted again. `placeAt` already guarded against it; drag did not.
+
+`clampShapeToWorld` (in `placement.ts`, 🧪 7 more assertions) clamps the **whole
+rectangle**, not just its origin — pinning the top-left to the edge still leaves the body
+hanging over it. Applied at three points, each earning its place:
+
+- **`Rectangle.onDragEnd`** — the visual correction, and it must set `e.target.position()`
+  explicitly. Konva owns the node during a drag and react-konva only writes `x`/`y` back
+  when the **prop** changes, so a shape dragged out from a position the clamp returns it to
+  keeps an unchanged prop, gets no update, and sits visibly out of bounds while the
+  committed value is correct. Verified against exactly that case.
+- **`CanvasContext.endDrag`** — the invariant, independent of caller.
+- **`placeAt`** — the same bug by another route: a click just inside the edge is legal but
+  centres a 120×80 rectangle half over it.
+
+*Verified live: (99999, 99999) → (9880, 9920); (−5000, −5000) → (0, 0); and origin-legal
+body-overhanging (9950, 5000) → (9880, 5000) — far edge landing on exactly 10000 in both
+directions. A real Konva drag from a flush-at-9880 shape, 250 px further out, snapped the
+node back to 9880 matching the commit. `bun run test` **103/103**.*
 
 ---
 

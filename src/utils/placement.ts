@@ -1,5 +1,5 @@
-import { PLACEMENT } from './constants'
-import type { Point } from './coords'
+import { PLACEMENT, WORLD } from './constants'
+import type { Point, Size } from './coords'
 
 /**
  * Whether a completed mouse gesture was a *click on the empty canvas* — the only gesture
@@ -36,4 +36,35 @@ export function shouldPlace({ down, up, targetIsStage }: PlacementGesture): bool
   const dy = up.y - down.y
 
   return Math.hypot(dx, dy) < PLACEMENT.tolerancePx
+}
+
+/**
+ * Pull a shape back inside the world.
+ *
+ * F1 calls the workspace **bounded**, and `clampViewport` already stops you panning past
+ * the edge — which is precisely what makes an out-of-bounds shape unreachable rather than
+ * merely untidy: it sits at a world coordinate the viewport is not allowed to travel to,
+ * so it renders nowhere and cannot be selected, moved or deleted again.
+ *
+ * Clamps the **whole** rectangle, not just its origin: pinning the top-left to the world
+ * edge still leaves the body hanging over it, since a shape is placed by its corner but
+ * seen as its full extent.
+ */
+export function clampShapeToWorld(
+  shape: { x: number; y: number; w: number; h: number },
+  world: Size = WORLD,
+): Point {
+  return {
+    x: clampAxis(shape.x, shape.w, world.width),
+    y: clampAxis(shape.y, shape.h, world.height),
+  }
+}
+
+function clampAxis(position: number, extent: number, worldLength: number): number {
+  // A shape bigger than the world would otherwise give an inverted range, where the upper
+  // bound sits below the lower one and `Math.min`/`Math.max` compose into nonsense. Not
+  // reachable at 120×80 in a 10,000 px world, but the guard costs nothing and this is
+  // exactly the kind of assumption a later resize invalidates silently.
+  const furthest = Math.max(0, worldLength - extent)
+  return Math.min(Math.max(position, 0), furthest)
 }

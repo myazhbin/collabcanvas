@@ -24,6 +24,21 @@ export type CursorChannel = {
   stop: () => void
 }
 
+/**
+ * The three gates every write to this tab's session node shares.
+ *
+ * `isSessionAnnounced` is the one that is easy to leave out and expensive to debug:
+ * `update()` on a missing path **creates** it, so any write that beats presence's announce
+ * manufactures a node with a payload and no identity on it.
+ */
+function canWriteSession(): boolean {
+  return connectionStore.getSnapshot().connected && isSessionAnnounced()
+}
+
+function sessionNode() {
+  return ref(rtdb, `${SESSIONS_PATH}/${sessionId}`)
+}
+
 export function startCursorChannel(): CursorChannel {
   const node = ref(rtdb, `${SESSIONS_PATH}/${sessionId}`)
   let stopped = false
@@ -35,17 +50,11 @@ export function startCursorChannel(): CursorChannel {
   let last: Point | null = null
 
   const write = (cursor: CursorPayload | null) => {
-    if (stopped) return
-
     // Gate on the socket rather than letting the SDK queue. RTDB buffers writes in memory
     // while offline and flushes the whole backlog on reconnect — which for a cursor is
     // pure waste: it pays for a trail of positions the user already left behind, and the
     // reconnect itself carries the only one that still means anything [R9,R14].
-    if (!connectionStore.getSnapshot().connected) return
-
-    // See `isSessionAnnounced` — this is what stops a cursor write conjuring a session
-    // node with no identity on it.
-    if (!isSessionAnnounced()) return
+    if (stopped || !canWriteSession()) return
 
     void update(node, { cursor }).catch((err) => {
       console.warn(`cursor write to /${SESSIONS_PATH}/${sessionId} failed`, err)
@@ -104,6 +113,86 @@ export function startCursorChannel(): CursorChannel {
     // Deliberately no null write here. This channel's lifetime is the presence node's
     // lifetime — both are keyed on the same uid — so the node is being removed anyway,
     // and a write racing a deletion is the one thing that can leave a ghost behind.
+  }
+
+  return { publish, stop }
+}
+
+/**
+ * The in-flight drag channel — PRD Decision 9, confirmed.
+ *
+ * Positions stream onto the **same session node** as the cursor, at the same 20 Hz, and
+ * Firestore sees exactly one transactional write per drag when the pointer is released.
+ * The arithmetic is what forces this: Firestore's Spark tier allows 20,000 writes/day, so
+ * a 20 Hz drag stream would exhaust an entire day's quota in about seventeen minutes of
+ * cumulative dragging, and with billing off there is no way to pay through it [R14].
+ *
+ * The alternative — commit only on release, stream nothing — is cheaper to build but makes
+ * remote rectangles *snap* instead of move, which fails acceptance item 5.
+ */
+export type DragPayload = { id: string; x: number; y: number }
+
+export type DragChannel = {
+  /** Stream a world position for the shape being dragged, or `null` on release. */
+  publish: (drag: DragPayload | null) => void
+  stop: () => void
+}
+
+export function startDragChannel(): DragChannel {
+  const node = sessionNode()
+  let stopped = false
+  let last: DragPayload | null = null
+
+  const write = (drag: DragPayload | null) => {
+    if (stopped || !canWriteSession()) return
+
+    void update(node, { drag }).catch((err) => {
+      console.warn(`drag write to /${SESSIONS_PATH}/${sessionId} failed`, err)
+    })
+  }
+
+  const send = throttle(write, THROTTLE_MS)
+
+  const clear = () => {
+    // Cancel the pending flush before writing null, or a queued in-flight position lands
+    // *after* the release and pins the rectangle at a stale spot for every other client
+    // until the next drag. This is the same ordering the cursor clear depends on.
+    send.cancel()
+    if (last === null) return
+    last = null
+    write(null)
+  }
+
+  const publish = (drag: DragPayload | null) => {
+    if (stopped) return
+    if (drag === null) {
+      clear()
+      return
+    }
+
+    // Movement-gated like the cursor: a held-but-motionless pointer writes nothing.
+    if (last !== null && last.id === drag.id && last.x === drag.x && last.y === drag.y) return
+    last = { ...drag }
+    send({ ...drag })
+  }
+
+  // A tab hidden mid-drag stays connected, so `onDisconnect` never fires and the shape
+  // would sit frozen at its last in-flight position for everyone else. Clearing the RTDB
+  // half here is only part of the fix — the Firestore `draggedBy` lock is released by
+  // CanvasProvider on the same event [R16].
+  const onVisibility = () => {
+    if (document.visibilityState === 'hidden') clear()
+  }
+  document.addEventListener('visibilitychange', onVisibility)
+
+  const stop = () => {
+    // Clear before tearing down rather than after: unlike the cursor, a leftover `drag`
+    // key survives on a node that presence is *not* removing (a drag channel restart is
+    // not a sign-out), and it would keep a rectangle pinned for everyone else.
+    clear()
+    stopped = true
+    send.cancel()
+    document.removeEventListener('visibilitychange', onVisibility)
   }
 
   return { publish, stop }

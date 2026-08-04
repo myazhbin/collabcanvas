@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { PLACEMENT } from './constants'
-import { shouldPlace } from './placement'
+import { PLACEMENT, SHAPE, WORLD } from './constants'
+import { clampShapeToWorld, shouldPlace } from './placement'
 
 /**
  * Tier 2 · PR 7 — R13.
@@ -51,5 +51,49 @@ describe('shouldPlace', () => {
     const t = PLACEMENT.tolerancePx
     expect(shouldPlace({ down: at(0, 0), up: at(t, 0), targetIsStage: true })).toBe(false)
     expect(shouldPlace({ down: at(0, 0), up: at(t - 0.001, 0), targetIsStage: true })).toBe(true)
+  })
+})
+
+describe('clampShapeToWorld', () => {
+  const box = (x: number, y: number) => ({ x, y, w: SHAPE.width, h: SHAPE.height })
+
+  it('leaves a shape comfortably inside the world alone', () => {
+    expect(clampShapeToWorld(box(5000, 4000))).toEqual({ x: 5000, y: 4000 })
+  })
+
+  it('pulls a shape back from past the top-left corner', () => {
+    expect(clampShapeToWorld(box(-500, -900))).toEqual({ x: 0, y: 0 })
+  })
+
+  it('pulls a shape back from past the bottom-right corner', () => {
+    expect(clampShapeToWorld(box(99_999, 99_999))).toEqual({
+      x: WORLD.width - SHAPE.width,
+      y: WORLD.height - SHAPE.height,
+    })
+  })
+
+  it('clamps the whole rectangle, not just its origin', () => {
+    // Origin inside the world, body hanging over the edge. Clamping only the corner would
+    // call this legal and leave 100 px of rectangle outside.
+    const justInside = WORLD.width - 20
+    expect(clampShapeToWorld(box(justInside, 5000)).x).toBe(WORLD.width - SHAPE.width)
+  })
+
+  it('clamps each axis independently', () => {
+    // Off the left edge but vertically fine — the y must not be disturbed.
+    expect(clampShapeToWorld(box(-40, 6000))).toEqual({ x: 0, y: 6000 })
+    expect(clampShapeToWorld(box(6000, -40))).toEqual({ x: 6000, y: 0 })
+  })
+
+  it('treats a shape flush against either edge as already legal', () => {
+    expect(clampShapeToWorld(box(0, 0))).toEqual({ x: 0, y: 0 })
+
+    const flush = { x: WORLD.width - SHAPE.width, y: WORLD.height - SHAPE.height }
+    expect(clampShapeToWorld(box(flush.x, flush.y))).toEqual(flush)
+  })
+
+  it('pins a shape larger than the world to the origin instead of inverting the range', () => {
+    const huge = { x: 50, y: 50, w: 999_999, h: 999_999 }
+    expect(clampShapeToWorld(huge)).toEqual({ x: 0, y: 0 })
   })
 })

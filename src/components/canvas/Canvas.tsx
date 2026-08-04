@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Layer, Rect, Shape, Stage } from 'react-konva'
 import type Konva from 'konva'
 import { GRID_MIN_SCREEN_PX, GRID_PITCHES, WORLD, ZOOM } from '../../utils/constants'
@@ -14,7 +14,12 @@ import {
 } from '../../utils/coords'
 import { useCursors } from '../../hooks/useCursors'
 import { useCanvas } from '../../hooks/useCanvas'
+import { useAuth } from '../../hooks/useAuth'
 import { shouldPlace } from '../../utils/placement'
+import { collectRemoteDrags } from '../../utils/shapeDiff'
+import { canDrag, isLockedByOther } from '../../utils/shapeLocks'
+import { generateUserColor } from '../../utils/helpers'
+import { sessionId } from '../../utils/session'
 import { Cursor } from '../collaboration/Cursor'
 import { Rectangle } from './Rectangle'
 import { Controls } from './Controls'
@@ -40,7 +45,41 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
   const [panning, setPanning] = useState(false)
 
   const { remote, latencyMs, publish } = useCursors(sessions)
-  const { shapes, tool, selectedId, select, placeAt, moveShape, deleteShape } = useCanvas()
+  const { user } = useAuth()
+  const { shapes, tool, selectedId, select, placeAt, deleteShape, beginDrag, moveDrag, endDrag } =
+    useCanvas()
+
+  const myUid = user?.uid ?? null
+
+  /** Shapes some other session is dragging right now, at their live in-flight position —
+   *  PRD §4.3's handoff. Falls back to the committed Firestore value when absent. */
+  const remoteDrags = useMemo(() => collectRemoteDrags(sessions, sessionId), [sessions])
+
+  /**
+   * uids with a live session. A `draggedBy` lock lives in Firestore, which `onDisconnect`
+   * cannot reach — so without this a client that crashes mid-drag leaves a rectangle
+   * nobody can ever move again. The session node vanishing is the liveness proof [R10].
+   */
+  const liveUids = useMemo(
+    () =>
+      new Set(
+        Object.values(sessions)
+          .map((node) => node?.uid)
+          .filter((uid): uid is string => typeof uid === 'string' && uid.length > 0),
+      ),
+    [sessions],
+  )
+
+  /** Colour of whoever holds each locked shape, for the outline. */
+  const lockColours = useMemo(() => {
+    const colours = new Map<string, string>()
+    for (const shape of shapes) {
+      if (isLockedByOther(shape, myUid, liveUids) && shape.draggedBy) {
+        colours.set(shape.id, generateUserColor(shape.draggedBy))
+      }
+    }
+    return colours
+  }, [shapes, myUid, liveUids])
 
   /** Where the pan started, in client coords, plus the viewport it started from.
    *  Deltas are taken against this rather than accumulated frame to frame — accumulating
@@ -333,12 +372,17 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
               key={shape.id}
               shape={shape}
               selected={shape.id === selectedId}
-              // Only in Select mode. In Rectangle mode a press on a shape must stay a
-              // press on a shape — refusing to place [R13] — without also moving it.
-              draggable={tool === 'select'}
+              // Three conditions. Select mode, because in Rectangle mode a press on a shape
+              // must stay a press on a shape [R13]; and the soft lock, so a shape another
+              // live user is holding cannot be grabbed out from under them [R10].
+              draggable={tool === 'select' && canDrag(shape, myUid, liveUids)}
+              lockColour={lockColours.get(shape.id) ?? null}
+              remote={remoteDrags.get(shape.id) ?? null}
               scale={viewport.scale}
               onSelect={select}
-              onMove={moveShape}
+              onDragStart={beginDrag}
+              onDragMove={moveDrag}
+              onDragEnd={endDrag}
             />
           ))}
         </Layer>
