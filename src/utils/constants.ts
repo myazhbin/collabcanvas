@@ -50,3 +50,11 @@ export const PRESENCE = { heartbeatMs: 10_000, staleAfterMs: 90_000, sweepMs: 5_
 
 /** Cursor/drag write interval. 20 Hz — the network throttle, never rAF [R16]. */
 export const THROTTLE_MS = 50
+
+/**
+ * How far the pointer may travel between press and release and still count as a click
+ * rather than a pan [R13]. **Screen pixels**, because it models a hand that is not
+ * perfectly still, not anything about the canvas — at 400% zoom a 4 px twitch has to stay
+ * a click. See `placement.ts` for why the target test matters just as much.
+ */
+export const PLACEMENT = { tolerancePx: 5 }

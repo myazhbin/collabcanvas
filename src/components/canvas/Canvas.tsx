@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Layer, Rect, Shape, Stage } from 'react-konva'
 import type Konva from 'konva'
-import { GRID_MIN_SCREEN_PX, GRID_PITCHES, SHAPE, WORLD, ZOOM } from '../../utils/constants'
+import { GRID_MIN_SCREEN_PX, GRID_PITCHES, WORLD, ZOOM } from '../../utils/constants'
 import {
   centreOn,
   clampViewport,
@@ -13,7 +13,11 @@ import {
   type Viewport,
 } from '../../utils/coords'
 import { useCursors } from '../../hooks/useCursors'
+import { useCanvas } from '../../hooks/useCanvas'
+import { shouldPlace } from '../../utils/placement'
 import { Cursor } from '../collaboration/Cursor'
+import { Rectangle } from './Rectangle'
+import { Controls } from './Controls'
 import type { SessionNode } from '../../utils/types'
 
 /**
@@ -36,6 +40,7 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
   const [panning, setPanning] = useState(false)
 
   const { remote, latencyMs, publish } = useCursors(sessions)
+  const { shapes, tool, selectedId, select, placeAt, moveShape, deleteShape } = useCanvas()
 
   /** Where the pan started, in client coords, plus the viewport it started from.
    *  Deltas are taken against this rather than accumulated frame to frame — accumulating
@@ -46,6 +51,10 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
   /** The pointer's last position in stage pixels, for republishing when the viewport
    *  moves under a stationary pointer. Null whenever the pointer is off the canvas. */
   const pointerScreen = useRef<Point | null>(null)
+
+  /** A left-button press in progress, held until release so the gesture can be judged as
+   *  a whole. Null while no primary press is down, and while panning. */
+  const gesture = useRef<{ down: Point; downWorld: Point; targetIsStage: boolean } | null>(null)
 
   // Sized from a ResizeObserver rather than a one-shot `window.innerWidth`: first paint
   // can happen before layout, and a snapshot taken then pins the stage at 0×0 for the
@@ -143,15 +152,77 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
     (e: Konva.KonvaEventObject<MouseEvent>) => {
       const middleButton = e.evt.button === 1
       const spaceDrag = spaceHeld && e.evt.button === 0
-      if (!middleButton && !spaceDrag) return
 
-      // Middle-click otherwise pastes on Linux and opens autoscroll on Windows.
-      e.evt.preventDefault()
-      panOrigin.current = { pointer: { x: e.evt.clientX, y: e.evt.clientY }, viewport }
-      setPanning(true)
+      if (middleButton || spaceDrag) {
+        // Middle-click otherwise pastes on Linux and opens autoscroll on Windows.
+        e.evt.preventDefault()
+        // Abandon any half-open press: this gesture is a pan and must not also resolve
+        // as a click when the button comes up.
+        gesture.current = null
+        panOrigin.current = { pointer: { x: e.evt.clientX, y: e.evt.clientY }, viewport }
+        setPanning(true)
+        return
+      }
+
+      if (e.evt.button !== 0) return
+
+      // Record, decide later. Whether this is a placement, a selection or a pan is not
+      // knowable at press time — only the completed gesture says [R13].
+      const stage = e.target.getStage()
+      const world = stage?.getRelativePointerPosition()
+      if (!stage || !world) return
+
+      gesture.current = {
+        down: { x: e.evt.clientX, y: e.evt.clientY },
+        downWorld: world,
+        // The press target, not the release target. Pressing on a shape is a selection or
+        // the start of a drag however it ends.
+        targetIsStage: e.target === stage,
+      }
     },
     [spaceHeld, viewport],
   )
+
+  // Resolved on `window`, so a release outside the canvas still ends the gesture — and
+  // ends it as *nothing*, since the distance test will have failed by then.
+  useEffect(() => {
+    const onUp = (e: MouseEvent) => {
+      const g = gesture.current
+      gesture.current = null
+      if (!g || e.button !== 0) return
+
+      // One predicate for both branches: it answers "was this a click on empty canvas?",
+      // which is the precondition for placing *and* for clearing the selection.
+      const wasBackgroundClick = shouldPlace({
+        down: g.down,
+        up: { x: e.clientX, y: e.clientY },
+        targetIsStage: g.targetIsStage,
+      })
+      if (!wasBackgroundClick) return
+
+      if (tool === 'rectangle') placeAt(g.downWorld)
+      else select(null)
+    }
+
+    window.addEventListener('mouseup', onUp)
+    return () => window.removeEventListener('mouseup', onUp)
+  }, [tool, placeAt, select])
+
+  // Delete removes the selection. Guarded on the focus target, or Backspace stops working
+  // as backspace the moment a shape is selected and the user clicks into a text field.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      if (!selectedId || isInteractiveTarget(e.target)) return
+
+      // Backspace is browser-history-back on some setups if it reaches the document.
+      e.preventDefault()
+      deleteShape(selectedId)
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [selectedId, deleteShape])
 
   // World coordinates, from Konva's own inverse of the stage transform [R3]. Screen
   // coordinates would be correct only while both viewports happen to match, and the
@@ -220,7 +291,17 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
       // canvas has to clear the cursor or you stay parked at the edge for everyone else.
       onMouseLeave={onMouseLeave}
       className="relative min-h-0 flex-1 overflow-hidden bg-neutral-200"
-      style={{ cursor: panning ? 'grabbing' : spaceHeld ? 'grab' : 'default' }}
+      style={{
+        cursor: panning
+          ? 'grabbing'
+          : spaceHeld
+            ? 'grab'
+            : // A crosshair is the only feedback that Rectangle mode is armed once the
+              // pointer is over the canvas and the toolbar is out of the corner of the eye.
+              tool === 'rectangle'
+              ? 'crosshair'
+              : 'default',
+      }}
     >
       <Stage
         width={size.width}
@@ -239,19 +320,27 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
           <Backdrop viewport={viewport} size={size} />
         </Layer>
 
-        {/* Shapes get their own Layer — their own canvas — from the start, so a cursor
-            or backdrop tick can never repaint 500 rectangles [R7]. PR 7 fills it. */}
-        <Layer>
-          <Rect
-            x={WORLD.width / 2 - SHAPE.width / 2}
-            y={WORLD.height / 2 - SHAPE.height / 2}
-            width={SHAPE.width}
-            height={SHAPE.height}
-            fill="#2563eb"
-            cornerRadius={4}
-            perfectDrawEnabled={false}
-            shadowForStrokeEnabled={false}
-          />
+        {/* Shapes get their own Layer — their own canvas — so a cursor or backdrop tick
+            can never repaint 500 rectangles [R7].
+
+            `listening` goes off while space is held: otherwise a space-drag that happens
+            to start over a rectangle both pans the stage and drags the shape, because
+            Konva sees a press on a draggable node and the Stage sees the pan modifier.
+            Switching the whole layer off is one prop and leaves nothing to disagree. */}
+        <Layer listening={!spaceHeld}>
+          {shapes.map((shape) => (
+            <Rectangle
+              key={shape.id}
+              shape={shape}
+              selected={shape.id === selectedId}
+              // Only in Select mode. In Rectangle mode a press on a shape must stay a
+              // press on a shape — refusing to place [R13] — without also moving it.
+              draggable={tool === 'select'}
+              scale={viewport.scale}
+              onSelect={select}
+              onMove={moveShape}
+            />
+          ))}
         </Layer>
       </Stage>
 
@@ -268,6 +357,8 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
           <Cursor key={cursor.sessionId} cursor={cursor} scale={viewport.scale} />
         ))}
       </div>
+
+      <Controls />
 
       <Hud viewport={viewport} spaceHeld={spaceHeld} latencyMs={latencyMs} />
     </div>

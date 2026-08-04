@@ -717,30 +717,82 @@ This changes a PR 5 constant, and PR 5's tests still pass because they assert th
 Local only. No sync yet — that's PR 8.
 
 **Files:** `+src/components/canvas/Rectangle.tsx` `+src/components/canvas/Controls.tsx`
-`+src/contexts/CanvasContext.tsx` `+src/utils/placement.ts`
-`~src/components/canvas/Canvas.tsx`
+`+src/contexts/CanvasContext.tsx` `+src/hooks/useCanvas.ts` `+src/utils/placement.ts`
+`+src/utils/placement.test.ts` `~src/components/canvas/Canvas.tsx` `~src/utils/constants.ts`
+`~src/App.tsx`
 
-- [ ] `placement.ts` — **pure** `shouldPlace({ down, up, targetIsStage })` → boolean
-- [ ] Place only if the pointer moved **<5px** between down and up **AND**
+- [x] `placement.ts` — **pure** `shouldPlace({ down, up, targetIsStage })` → boolean
+- [x] Place only if the pointer moved **<5px** between down and up **AND**
       `e.target === e.target.getStage()`. Without both, finishing a pan drops a phantom
       rectangle and clicking a shape stacks one on top `[R13]`
-- [ ] Fixed 120×80 rectangle centered on the click; fill cycled from the palette
-- [ ] After placing, return to Select mode with the new shape selected
-- [ ] `Rectangle.tsx` — `e.cancelBubble = true` in `onDragStart`, or dragging a shape also
+- [x] Fixed 120×80 rectangle centered on the click; fill cycled from the palette
+- [x] After placing, return to Select mode with the new shape selected
+- [x] `Rectangle.tsx` — `e.cancelBubble = true` in `onDragStart`, or dragging a shape also
       drags the stage `[R13]`
-- [ ] `perfectDrawEnabled={false}` and `shadowForStrokeEnabled={false}` on every Rect `[R7]`
-- [ ] Selection outline; click empty canvas to deselect; Delete/Backspace removes
+- [x] `perfectDrawEnabled={false}` and `shadowForStrokeEnabled={false}` on every Rect `[R7]`
+- [x] Selection outline; click empty canvas to deselect; Delete/Backspace removes.
+      *The outline's `strokeWidth` is divided by the stage scale, like the backdrop grid —
+      Konva multiplies stroke width by the transform, so a fixed 2 is an 8 px slab at 400%
+      and a hairline at 10%.*
 
-**🧪 `placement.test.ts` — Tier 2 · ~8m** — the guard has two conditions and agents
-routinely implement only one.
-- [ ] 0px on the stage background → **place**
-- [ ] 4px on the stage background → **place** (tolerance for shaky clicks)
-- [ ] 50px on the stage background → **do not place** (this is a pan) `[R13]`
-- [ ] 0px but the target is a shape → **do not place** (this is a selection) `[R13]`
-- [ ] Diagonal uses true distance, not per-axis — 4px x *and* 4px y is 5.7px, no place
+**Two decisions the checklist doesn't name.** The press is recorded and the gesture judged
+on **release**, because whether a press is a placement, a selection or a pan is simply not
+knowable at press time — and the release is resolved on `window`, so letting go outside the
+canvas ends the gesture as *nothing* rather than leaving it half-open. And the shapes layer
+takes `listening={!spaceHeld}`: without it a space-drag that happens to start over a
+rectangle both pans the stage and drags the shape, since Konva sees a press on a draggable
+node while the Stage sees the pan modifier. One prop, and nothing is left to disagree.
+
+**🧪 `placement.test.ts` — Tier 2 · ~8m — ✅ done, 7/7 green** — the guard has two
+conditions and agents routinely implement only one.
+- [x] 0px on the stage background → **place**
+- [x] 4px on the stage background → **place** (tolerance for shaky clicks)
+- [x] 50px on the stage background → **do not place** (this is a pan) `[R13]`
+- [x] 0px but the target is a shape → **do not place** (this is a selection) `[R13]`
+- [x] Diagonal uses true distance, not per-axis — 4px x *and* 4px y is 5.7px, no place.
+      *Paired with the same total travel on a single axis, so the diagonal case cannot
+      pass for an unrelated reason.*
+- [x] *Added:* symmetric — up-left is the same gesture as down-right
+- [x] *Added:* the bound is closed on one side only — exactly `tolerancePx` does **not**
+      place, a hair under it does
 
 **Done when:** panning never creates a phantom rectangle and dragging a shape never pans
-the stage `[R13]`.
+the stage `[R13]`. ✅
+
+*`bun run test` 52/52 (45 → 52), `tsc -b && vite build` and `oxlint` clean. Everything
+below was driven through real DOM events against the running app.*
+
+| Check | Result |
+|---|---|
+| Motionless click, empty canvas | places **1** |
+| 4 px drift / 6 px drift | **places** / **does not place** — the tolerance boundary, live |
+| 50 px travel `[R13]` | **0 placed** |
+| Click **on** a shape `[R13]` | **0 placed**, with the hit probe returning `Rect` |
+| Select mode, click empty canvas | **0 placed** |
+| **Space-drag pan in Rectangle mode** `[R13]` | viewport moved exactly **(100, 60)**, **0 phantoms** |
+| **Drag a shape** `[R13]` | shape moved exactly **(80, 50)**, **stage did not move at all** |
+| Delete key | removes 1, clears the selection |
+| Placement geometry | click at (300, 250) under vp {1, −4763, −4610} → shape at world **(5003, 4820)**, matching the prediction exactly |
+| Palette + auto-return | five placements cycled blue→red→green→orange→purple, each ending in Select with the new shape outlined |
+
+### Three testing traps, all of which produced convincing false results first
+
+Worth writing down because PR 11 runs this ground again by hand, and each of these looked
+exactly like a product bug.
+
+1. **A hidden browser pane gives the stage 0×0 layout.** `getIntersection` then returns
+   `Stage` for every point, because the hit canvas is zero-sized — so "click on a shape"
+   silently becomes "click on the background" and the R13 target guard reads as broken. It
+   also means the **no-stacking assertion passes vacuously**, which is worse than failing.
+   Assert the stage has non-zero size before trusting any hit test.
+2. **Konva batches draws on rAF, which is frozen in a background tab**, so the hit canvas
+   can be stale even at full size. `stage.draw()` forces it synchronously.
+3. **Dispatching mousedown/mousemove/mouseup synchronously beats React to its own
+   listeners.** The pan subscribes to `window` inside an effect, so a `mousemove` sent in
+   the same tick is missed and the pan stays armed — then leaks into the *next* test and
+   moves the stage there. Every synthetic gesture has to yield between events, and
+   `setTimeout` is the wrong yield: it is clamped to 1 s in a hidden tab. `MessageChannel`
+   is not clamped, which is exactly why React's own scheduler uses it.
 
 ---
 

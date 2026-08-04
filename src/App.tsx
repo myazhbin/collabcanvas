@@ -1,4 +1,5 @@
 import { AuthProvider } from './contexts/AuthContext'
+import { CanvasProvider } from './contexts/CanvasContext'
 import { useAuth } from './hooks/useAuth'
 import { usePresence } from './hooks/usePresence'
 import { Login } from './components/auth/Login'
@@ -40,10 +41,12 @@ function CanvasScreen() {
   const { online, sessions } = usePresence()
 
   return (
-    <div className="flex h-full flex-col">
-      <Navbar online={online} />
-      <Canvas sessions={sessions} />
-    </div>
+    <CanvasProvider>
+      <div className="flex h-full flex-col">
+        <Navbar online={online} />
+        <Canvas sessions={sessions} />
+      </div>
+    </CanvasProvider>
   )
 }
 
