@@ -83,7 +83,10 @@
       "Bash(echo \"ignored=$?\")",
       "Bash(grep -c \"^\\\\.env$\")",
       "Bash(bunx vite *)",
-      "Bash(awk '/^## PR 1/,/^## PR 3/' TASKS.md)"
+      "Bash(awk '/^## PR 1/,/^## PR 3/' TASKS.md)",
+      "Bash(node --input-type=module -e ' *)",
+      "Bash(curl -sI http://localhost:5173/)",
+      "Bash(git diff *)"
     ]
   }
 }

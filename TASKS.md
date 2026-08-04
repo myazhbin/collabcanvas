@@ -274,48 +274,73 @@ The highest-risk PR in the build. Five separate risks live here.
 `+src/components/auth/Signup.tsx` `+src/components/layout/Navbar.tsx`
 `+src/utils/authMachine.ts` `+src/utils/authErrors.ts` `~src/App.tsx`
 
-- [ ] `authMachine.ts` — three-state logic (`loading | signedIn | signedOut`) as a **pure
-      reducer** plus a timeout decision function, testable without Firebase
-- [ ] `AuthContext.tsx` — wire `onAuthStateChanged` to the machine; starts `loading` `[R4]`
-- [ ] **3–5s timeout** force-exiting `loading` → `signedOut`; without it an IndexedDB
-      `AbortError` white-screens normal Safari forever `[R4]`
-- [ ] **Neutral splash** while loading — never the login form, or it flashes on every
+- [x] `authMachine.ts` — three-state logic (`loading | signedIn | signedOut`) as a **pure
+      reducer** plus a timeout decision function, testable without Firebase.
+      *`startAuthMachine(observe, dispatch)` carries the timer wiring with React and
+      Firebase both injected, so the test drives the shipped code rather than a
+      lookalike harness — the failure mode of a timer test is that it silently stops
+      matching the effect it was written for.*
+- [x] `AuthContext.tsx` — wire `onAuthStateChanged` to the machine; starts `loading` `[R4]`
+- [x] **3–5s timeout** force-exiting `loading` → `signedOut`; without it an IndexedDB
+      `AbortError` white-screens normal Safari forever `[R4]` — `AUTH_TIMEOUT_MS = 4000`
+- [x] **Neutral splash** while loading — never the login form, or it flashes on every
       reload `[R4]`
-- [ ] **Do not call `setPersistence`** — the default is correct; calling it downgrades
-      IndexedDB to localStorage
-- [ ] Expose `getIdToken()` from the context now, for whatever hosts the Phase-2 agent
-- [ ] **Never `setUser({...auth.currentUser})`** — spreading the class instance silently
-      loses `getIdToken` `[R11]`
-- [ ] `Signup.tsx` — capture `displayName` into React state **before** calling
-      `createUserWithEmailAndPassword`; fire `updateProfile` unawaited `[R11]`
-- [ ] Inline "at least 6 characters" hint on the password field
-- [ ] Google: `signInWithPopup` as the **first statement** in the click handler, no
-      preceding `await`, with `prompt: 'select_account'` `[R20]`
-- [ ] Never `signInWithRedirect`; never `sendEmailVerification`; never gate on
+- [x] **Do not call `setPersistence`** — the default is correct; calling it downgrades
+      IndexedDB to localStorage *(recorded as an explicit absence at the top of
+      `authService.ts`, so it doesn't get "helpfully" added later)*
+- [x] Expose `getIdToken()` from the context now, for whatever hosts the Phase-2 agent
+- [x] **Never `setUser({...auth.currentUser})`** — spreading the class instance silently
+      loses `getIdToken` `[R11]`. *The `User` passes through the reducer by reference, and
+      `authMachine.test.ts` asserts the identity rather than trusting the comment.*
+- [x] `Signup.tsx` — capture `displayName` into React state **before** calling
+      `createUserWithEmailAndPassword`; fire `updateProfile` unawaited `[R11]`.
+      *The captured name is held in `AuthContext` too, not just the form — the form
+      unmounts on success, and PR 5 needs the name for the session node.*
+- [x] Inline "at least 6 characters" hint on the password field
+- [x] Google: `signInWithPopup` as the **first statement** in the click handler, no
+      preceding `await`, with `prompt: 'select_account'` `[R20]`. *The context's
+      `signInWithGoogle` is deliberately not `async` for the same reason.*
+- [x] Never `signInWithRedirect`; never `sendEmailVerification`; never gate on
       `emailVerified`
-- [ ] `authErrors.ts` — one `mapAuthError` switch on `AuthErrorCodes` (imported, not
+- [x] `authErrors.ts` — one `mapAuthError` switch on `AuthErrorCodes` (imported, not
       hand-typed), `default: return err.message`
-- [ ] Sign-out order: `onDisconnect().cancel()` → `remove()` the session node →
-      `signOut()` — wired fully in PR 5 `[R19]`
-- [ ] Mount **all** Firestore and RTDB listeners inside a `useEffect` keyed on `user?.uid`,
-      never `[]` `[R4,R19]`
+- [x] Sign-out order: `onDisconnect().cancel()` → `remove()` the session node →
+      `signOut()` — wired fully in PR 5 `[R19]`. *PR 3 lands the seam: `logOut(teardown?)`
+      awaits the teardown first and swallows its failure, because a session you cannot
+      sign out of is worse than a ghost node.*
+- [x] Mount **all** Firestore and RTDB listeners inside a `useEffect` keyed on `user?.uid`,
+      never `[]` `[R4,R19]`. *Vacuous in PR 3 — no data listener exists yet. The one `[]`
+      effect in `AuthContext` is the auth observer itself, which is the sole legitimate
+      case; the rule is written down at that effect for PR 5 and PR 8 to land against.*
 
-**🧪 `authMachine.test.ts` — Tier 2 · ~15m** — tests the one thing you cannot reproduce
-manually. Use `vi.useFakeTimers()`.
-- [ ] Initial state is `loading`, never `signedOut` `[R4]`
-- [ ] A user event → `signedIn`; a null event → `signedOut`
-- [ ] **No event ever arrives → `signedOut` after the timeout.** The assertion that
+**🧪 `authMachine.test.ts` — Tier 2 · ~15m — ✅ done, 8/8 green** — tests the one thing you
+cannot reproduce manually. Use `vi.useFakeTimers()`.
+- [x] Initial state is `loading`, never `signedOut` `[R4]`
+- [x] A user event → `signedIn`; a null event → `signedOut`
+- [x] **No event ever arrives → `signedOut` after the timeout.** The assertion that
       prevents a permanent white screen in Safari `[R4]`
-- [ ] An event *after* the timeout still transitions correctly (no stuck state)
-- [ ] The timeout is cancelled once an event arrives — no late override of `signedIn`
+- [x] An event *after* the timeout still transitions correctly (no stuck state)
+- [x] The timeout is cancelled once an event arrives — no late override of `signedIn`
+- [x] *Added:* teardown disarms the pending timeout and unsubscribes — a StrictMode
+      double-mount otherwise leaves an orphan timer armed against the second machine
 
-**🧪 `authErrors.test.ts` — Tier 2 · ~5m**
-- [ ] Known codes map to human strings
-- [ ] **An unknown code never returns `undefined`** — a blank error box reads as broken
-- [ ] `POPUP_CLOSED_BY_USER` returns null (swallowed, not shown as an error)
+**🧪 `authErrors.test.ts` — Tier 2 · ~5m — ✅ done, 4/4 green**
+- [x] Known codes map to human strings
+- [x] **An unknown code never returns `undefined`** — a blank error box reads as broken
+- [x] `POPUP_CLOSED_BY_USER` returns null (swallowed, not shown as an error)
+- [x] *Added:* `AuthErrorCodes.INVALID_ORIGIN === 'auth/unauthorized-domain'`. The
+      constant *named* `UNAUTHORIZED_DOMAIN` is `auth/unauthorized-continue-uri`, a
+      different error entirely — so importing the codes instead of hand-typing them only
+      helps if you import the right one. This is R8's signature on the deployed URL.
 
 **Done when:** signup, email login, and Google login all work **on the deployed URL** from
 a fresh incognito window — and Google works from a **non-owner** account `[R8]`.
+
+*Verified locally without credentials: login and signup screens render, no console errors,
+and the dev server sets no COOP/COEP header (the R20 precondition). `bun run test` 13/13,
+`tsc -b && vite build` and `oxlint` clean.* **Still open — needs a human at a keyboard:**
+the three sign-in round trips above, plus the non-owner Google check. Nothing in the
+signed-in branch (Navbar, sign-out) has executed against a real credential yet.
 
 ---
 
