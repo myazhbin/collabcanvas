@@ -1,5 +1,9 @@
 import { initializeApp, type FirebaseOptions } from 'firebase/app'
-import { getAuth } from 'firebase/auth'
+import {
+  browserPopupRedirectResolver,
+  browserSessionPersistence,
+  initializeAuth,
+} from 'firebase/auth'
 import { getFirestore } from 'firebase/firestore'
 import { getDatabase, onValue, ref } from 'firebase/database'
 
@@ -29,7 +33,38 @@ if (!firebaseConfig.databaseURL) {
 }
 
 export const app = initializeApp(firebaseConfig)
-export const auth = getAuth(app)
+
+/**
+ * **Auth is scoped to the tab, not the origin.** This overrides PR 3's "never touch
+ * persistence" rule deliberately, and the reason is worth stating precisely because the
+ * symptom looks like a presence bug and is not one.
+ *
+ * The default (`indexedDBLocalPersistence`) stores one session per *origin*, and the SDK
+ * actively syncs auth state between tabs. So signing into a second account in a second tab
+ * replaces the single shared session and pushes that change into the first tab, whose
+ * `onAuthStateChanged` fires with the new user. Both tabs become the same person. Presence
+ * then reports exactly that — `dedupeByUid` collapses the two session nodes to one avatar,
+ * which reads as "the other user vanished" when it is really "there is only one user now".
+ *
+ * `browserSessionPersistence` is sessionStorage, which is per-tab by definition, so two
+ * tabs hold two independent accounts. The cost is real and accepted: a *new* tab starts
+ * signed out, and closing the tab or quitting the browser ends that session. A reload in
+ * the same tab still stays signed in, so R4's neutral-splash reasoning is untouched.
+ *
+ * Note what this is *not*: it is not the localStorage downgrade PR 3 warned against.
+ * It also takes auth off IndexedDB entirely, which is where `firebase-js-sdk` #7888's
+ * Safari `AbortError` lives — the bug the auth timeout exists to survive [R4].
+ *
+ * `initializeAuth` rather than `setPersistence`, because the latter is async and races
+ * every sign-in that beats it. `browserPopupRedirectResolver` is **not optional** here:
+ * `initializeAuth` installs no resolver by default, and without it `signInWithPopup`
+ * throws `auth/argument-error` — Google sign-in, gate items 4/5/6, and R8 all with it.
+ */
+export const auth = initializeAuth(app, {
+  persistence: browserSessionPersistence,
+  popupRedirectResolver: browserPopupRedirectResolver,
+})
+
 export const db = getFirestore(app)
 export const rtdb = getDatabase(app)
 

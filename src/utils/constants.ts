@@ -28,12 +28,25 @@ export const GRID_MIN_SCREEN_PX = 24
 
 /**
  * Presence timings. The heartbeat is the only thing that keeps a node looking alive, so
- * `staleAfterMs` has to tolerate a couple of missed beats — Firebase publishes no
- * ungraceful-disconnect timeout, and this filter is the backstop for a client that died
- * without `onDisconnect` firing. `sweepMs` re-evaluates staleness on a timer, because a
- * peer that stops sending never triggers a listener callback to recompute it.
+ * `staleAfterMs` has to tolerate missed beats — Firebase publishes no ungraceful-disconnect
+ * timeout, and this filter is the backstop for a client that died without `onDisconnect`
+ * firing. `sweepMs` re-evaluates staleness on a timer, because a peer that stops sending
+ * never triggers a listener callback to recompute it.
+ *
+ * **`staleAfterMs` was 30 s and that was too tight.** Browsers throttle timers in hidden
+ * tabs: Chromium clamps `setInterval` to 1 Hz as soon as a tab is backgrounded and to
+ * **once per minute** after ~5 minutes of it. A 10 s heartbeat therefore cannot keep a
+ * backgrounded tab under a 30 s threshold, so a user who simply switched tabs vanished
+ * from everyone else's panel within half a minute and reappeared when they came back —
+ * measured, not theorised, with two tabs open on this canvas.
+ *
+ * They had not left. The RTDB socket stays open in a hidden tab, which is precisely why
+ * `onDisconnect` — a *server-side* handler fired by socket loss — is the real leave
+ * signal and this filter is only the backstop for the rare case that misses. 90 s clears
+ * the worst-case throttled gap with headroom, and erring long is the direction R17 already
+ * argues for: a ghost is a blemish, an empty list is a failed gate item.
  */
-export const PRESENCE = { heartbeatMs: 10_000, staleAfterMs: 30_000, sweepMs: 5_000 }
+export const PRESENCE = { heartbeatMs: 10_000, staleAfterMs: 90_000, sweepMs: 5_000 }
 
 /** Cursor/drag write interval. 20 Hz — the network throttle, never rAF [R16]. */
 export const THROTTLE_MS = 50

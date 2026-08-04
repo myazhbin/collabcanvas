@@ -12,8 +12,11 @@ import { auth } from './firebase'
 /**
  * Four calls, and four deliberate absences:
  *
- * - **No `setPersistence`.** The default is already IndexedDB and already survives a
- *   reload; calling it explicitly downgrades to localStorage.
+ * - **No `setPersistence`.** ~~The default is already IndexedDB.~~ **Superseded:**
+ *   persistence is now chosen once, at construction, in `firebase.ts` — tab-scoped, so
+ *   two tabs can hold two accounts. It is still never called *here*: `setPersistence` is
+ *   async and would race the sign-in below. See the note on `auth` for the full reasoning
+ *   and what it costs.
  * - **No `sendEmailVerification`, no `emailVerified` gate.** PRD F7 rules out an email
  *   wall — a grader will not go and check an inbox.
  * - **No `signInWithRedirect`.** Popup only [R20].
