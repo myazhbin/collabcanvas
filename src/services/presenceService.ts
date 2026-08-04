@@ -21,7 +21,15 @@ export const SESSIONS_PATH = `sessions/${CANVAS_ID}`
  *  returns as epoch milliseconds. */
 type SessionWrite = Omit<SessionNode, 'lastSeen'> & { lastSeen: object }
 
-let activeTeardown: (() => Promise<void>) | null = null
+/**
+ * The one live publisher for this tab. `isAnnounced` is read by `cursorService` before
+ * every write: cursor updates target the *same* node, and `update()` on a missing path
+ * **creates** it — so a cursor write that beats the announce manufactures a session node
+ * carrying a position and no `uid`, `name` or `colour`. That is the nameless ghost PR 5
+ * hit, and gating on this makes it unreachable rather than merely unlikely.
+ */
+type ActiveSession = { teardown: () => Promise<void>; isAnnounced: () => boolean }
+let active: ActiveSession | null = null
 
 /**
  * Session-node writes share one path per tab, so a start and a teardown that overlap
@@ -131,7 +139,10 @@ export function startPresence(identity: PresenceIdentity): () => Promise<void> {
     stopped = true
     clearInterval(heartbeat)
     unsubscribe()
-    if (activeTeardown === teardown) activeTeardown = null
+    // Cleared synchronously, ahead of the two awaits below, so `isSessionAnnounced()`
+    // goes false the instant teardown begins. A cursor write that slips through after
+    // the node is removed would recreate it as a ghost.
+    if (active?.teardown === teardown) active = null
 
     await serialise(async () => {
       // Cancel before remove. The other order leaves a disconnect handler armed at a path
@@ -142,8 +153,18 @@ export function startPresence(identity: PresenceIdentity): () => Promise<void> {
     })
   }
 
-  activeTeardown = teardown
+  active = { teardown, isAnnounced: () => announced && !stopped }
   return teardown
+}
+
+/**
+ * Whether this tab's session node is established on the server *right now* — not "did we
+ * try", and not "are we connected". Every write that targets the node but does not own
+ * its lifecycle has to check this first; see `ActiveSession` above for what happens
+ * otherwise.
+ */
+export function isSessionAnnounced(): boolean {
+  return active?.isAnnounced() ?? false
 }
 
 /**
@@ -154,5 +175,5 @@ export function startPresence(identity: PresenceIdentity): () => Promise<void> {
  * A no-op when presence was never started — signing out from the login screen is legal.
  */
 export async function leavePresence(): Promise<void> {
-  await activeTeardown?.()
+  await active?.teardown()
 }

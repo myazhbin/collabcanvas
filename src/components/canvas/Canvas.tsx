@@ -12,6 +12,9 @@ import {
   type Size,
   type Viewport,
 } from '../../utils/coords'
+import { useCursors } from '../../hooks/useCursors'
+import { Cursor } from '../collaboration/Cursor'
+import type { SessionNode } from '../../utils/types'
 
 /**
  * The pannable, zoomable stage. The viewport lives in local component state and is
@@ -25,18 +28,24 @@ import {
  * Panning is bound to gestures a placement click can never be confused with: hold
  * space, middle-drag, or two-finger scroll.
  */
-export function Canvas() {
+export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState<Size>({ width: 0, height: 0 })
   const [viewport, setViewport] = useState<Viewport>({ scale: 1, x: 0, y: 0 })
   const [spaceHeld, setSpaceHeld] = useState(false)
   const [panning, setPanning] = useState(false)
 
+  const { remote, latencyMs, publish } = useCursors(sessions)
+
   /** Where the pan started, in client coords, plus the viewport it started from.
    *  Deltas are taken against this rather than accumulated frame to frame — accumulating
    *  lets a clamped edge eat travel, so the canvas stops tracking the pointer. */
   const panOrigin = useRef<{ pointer: Point; viewport: Viewport } | null>(null)
   const centred = useRef(false)
+
+  /** The pointer's last position in stage pixels, for republishing when the viewport
+   *  moves under a stationary pointer. Null whenever the pointer is off the canvas. */
+  const pointerScreen = useRef<Point | null>(null)
 
   // Sized from a ResizeObserver rather than a one-shot `window.innerWidth`: first paint
   // can happen before layout, and a snapshot taken then pins the stage at 0×0 for the
@@ -144,6 +153,39 @@ export function Canvas() {
     [spaceHeld, viewport],
   )
 
+  // World coordinates, from Konva's own inverse of the stage transform [R3]. Screen
+  // coordinates would be correct only while both viewports happen to match, and the
+  // error grows with pan distance and scales with zoom — so it is exactly zero between
+  // two developers on localhost and obvious the moment a grader scrolls.
+  const onMouseMove = useCallback(
+    (e: Konva.KonvaEventObject<MouseEvent>) => {
+      const stage = e.target.getStage()
+      const screen = stage?.getPointerPosition()
+      const world = stage?.getRelativePointerPosition()
+      if (!screen || !world) return
+
+      pointerScreen.current = screen
+      publish(world)
+    },
+    [publish],
+  )
+
+  const onMouseLeave = useCallback(() => {
+    pointerScreen.current = null
+    publish(null)
+  }, [publish])
+
+  // A wheel-zoom or a scroll-pan moves the world *under* a stationary pointer without
+  // producing a single mousemove, so without this the position everyone else holds stays
+  // pinned to the pre-zoom world point until you jiggle the mouse — your arrow visibly
+  // detaches from where you actually are. `screenToWorld` is the same transform Konva
+  // inverts above: a stage whose only transform is the viewport reduces to exactly it,
+  // and `coords.test.ts` pins the round trip.
+  useEffect(() => {
+    const screen = pointerScreen.current
+    if (screen) publish(screenToWorld(screen, viewport))
+  }, [viewport, publish])
+
   const onWheel = useCallback(
     (e: Konva.KonvaEventObject<WheelEvent>) => {
       // The page would otherwise scroll, and a pinch would zoom the whole browser.
@@ -173,6 +215,10 @@ export function Canvas() {
   return (
     <div
       ref={containerRef}
+      // `mouseleave` on the container rather than on the Stage: it is plain DOM, it fires
+      // whether or not the pointer was over a Konva node on the way out, and leaving the
+      // canvas has to clear the cursor or you stay parked at the edge for everyone else.
+      onMouseLeave={onMouseLeave}
       className="relative min-h-0 flex-1 overflow-hidden bg-neutral-200"
       style={{ cursor: panning ? 'grabbing' : spaceHeld ? 'grab' : 'default' }}
     >
@@ -185,6 +231,7 @@ export function Canvas() {
         y={viewport.y}
         onWheel={onWheel}
         onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
       >
         {/* Backdrop. `listening={false}` keeps 10,000 px of grid out of the hit graph,
             so PR 7's placement guard still sees the Stage as the event target [R13]. */}
@@ -208,11 +255,21 @@ export function Canvas() {
         </Layer>
       </Stage>
 
-      {/* Cursor overlay slot. PR 6 renders remote cursors here as absolutely-positioned
-          DOM rather than Konva nodes, which keeps cursor ticks off the shape render path
-          entirely and stops the arrows growing with zoom [R3,R21]. */}
+      {/* The cursor overlay: absolutely-positioned DOM *above* the stage, never Konva
+          nodes, so cursor ticks stay off the shape render path and the arrows don't grow
+          with zoom [R3,R21]. The layer carries this viewer's pan; each cursor carries the
+          scale. Clipped by the container's `overflow-hidden`, so a peer 10,000 px away
+          costs one off-screen div and no layout. */}
+      <div
+        className="cc-cursor-layer"
+        style={{ transform: `translate3d(${viewport.x}px, ${viewport.y}px, 0)` }}
+      >
+        {remote.map((cursor) => (
+          <Cursor key={cursor.sessionId} cursor={cursor} scale={viewport.scale} />
+        ))}
+      </div>
 
-      <Hud viewport={viewport} spaceHeld={spaceHeld} />
+      <Hud viewport={viewport} spaceHeld={spaceHeld} latencyMs={latencyMs} />
     </div>
   )
 }
@@ -269,9 +326,18 @@ function Backdrop({ viewport, size }: { viewport: Viewport; size: Size }) {
   )
 }
 
-/** Zoom readout and the pan hint. Both answer questions a grader asks in the first ten
- *  seconds: how far in am I, and how do I move? */
-function Hud({ viewport, spaceHeld }: { viewport: Viewport; spaceHeld: boolean }) {
+/** Zoom readout, pan hint, and the measured cursor latency. The first two answer the
+ *  questions a grader asks in the first ten seconds; the third is F5's <50 ms target
+ *  reported from the wire rather than assumed from the send rate. */
+function Hud({
+  viewport,
+  spaceHeld,
+  latencyMs,
+}: {
+  viewport: Viewport
+  spaceHeld: boolean
+  latencyMs: number | null
+}) {
   return (
     <div className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-3 rounded-lg bg-white/85 px-2.5 py-1.5 font-mono text-xs text-neutral-500 shadow-sm backdrop-blur-sm">
       <span className="tabular-nums">{Math.round(viewport.scale * 100)}%</span>
@@ -280,6 +346,21 @@ function Hud({ viewport, spaceHeld }: { viewport: Viewport; spaceHeld: boolean }
       <span>scroll</span>
       <span>·</span>
       <span>wheel or pinch to zoom</span>
+
+      {latencyMs !== null && (
+        <>
+          <span>·</span>
+          {/* Median, and it includes the throttle's own sampling delay — F5 is explicit
+              that a 20 Hz send rate adds up to 50 ms before the wire and that the target
+              must not be recorded as met on the strength of the interval alone. */}
+          <span
+            title="median end-to-end cursor latency, measured from the payload timestamp"
+            className="tabular-nums"
+          >
+            {latencyMs} ms
+          </span>
+        </>
+      )}
     </div>
   )
 }

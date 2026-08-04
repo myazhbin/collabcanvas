@@ -6,3 +6,48 @@ body,
   height: 100%;
   margin: 0;
 }
+
+/* ---------------------------------------------------------------------------
+   Remote cursors — DOM over the Konva stage, never Konva nodes [R3,R21].
+   See Cursor.tsx for why, including why the transform is split across these two
+   rules rather than applied once per cursor.
+   --------------------------------------------------------------------------- */
+
+.cc-cursor-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* Zero-size on purpose: the transform makes it the containing block for the
+     absolutely-positioned cursors, and nothing else needs a box. */
+  pointer-events: none;
+  will-change: transform;
+  /* No transition here, deliberately. This carries *this viewer's* pan, which has to
+     track the canvas exactly — smoothing it makes every pan drag the cursors behind the
+     shapes they are pointing at. */
+}
+
+.cc-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* R21. Incoming positions are 50 ms apart and read as choppy applied raw — a
+     perception problem, not a latency one, and gate 5 is judged by eye. 60 ms is just
+     longer than the send interval, so each hop is still in motion when the next lands,
+     and this one line buys ~95% of a hand-rolled rAF lerp. */
+  transition: transform 60ms linear;
+  will-change: transform;
+}
+
+.cc-cursor-label {
+  position: absolute;
+  top: 15px;
+  left: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: #fff;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+}

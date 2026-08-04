@@ -30,18 +30,19 @@ function AuthGate() {
 /**
  * `usePresence` lives here, above both consumers, because it *publishes* this tab's
  * session node as well as reading everyone's — calling it in two components would start
- * two publishers and two listeners. PR 6 takes `sessions` from the same call for cursors,
- * which need one per session where the online list needs one per uid [R2].
+ * two publishers and two listeners. Cursors come off the same call: one listener on
+ * `/sessions/{canvas}` feeds both, and the two differ only in keying — `online` is one
+ * entry per uid, `sessions` is one per sessionId [R2].
  *
  * It also sits below the gate, so the listener mounts only once auth has resolved [R4].
  */
 function CanvasScreen() {
-  const { online } = usePresence()
+  const { online, sessions } = usePresence()
 
   return (
     <div className="flex h-full flex-col">
       <Navbar online={online} />
-      <Canvas />
+      <Canvas sessions={sessions} />
     </div>
   )
 }

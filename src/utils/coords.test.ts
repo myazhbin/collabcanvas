@@ -3,6 +3,7 @@ import { WORLD, ZOOM } from './constants'
 import {
   centreOn,
   clampViewport,
+  panBy,
   screenToWorld,
   worldToScreen,
   zoomAtPoint,
@@ -11,8 +12,8 @@ import {
 
 /**
  * Part 1 · Tier 2 · PR 4 — the zoom-to-cursor invariant and the scale clamps.
- * PR 6 adds part 2: the world↔screen round trip and the two-viewport agreement that
- * make up R3 proper.
+ * Part 2 · Tier 1 · PR 6 — the world↔screen round trip and the two-viewport agreement
+ * that make up R3 proper, at the bottom of the file.
  */
 
 const STAGE = { width: 1280, height: 720 }
@@ -119,5 +120,103 @@ describe('centreOn', () => {
 
     expect(screen.x).toBeCloseTo(STAGE.width / 2, 10)
     expect(screen.y).toBeCloseTo(STAGE.height / 2, 10)
+  })
+})
+
+/**
+ * Part 2 · Tier 1 · PR 6 — R3, which is rated critical and is completely invisible on
+ * localhost, because two developers sitting at identical viewports never produce the
+ * offset that exposes it. It reduces to a handful of assertions here.
+ */
+describe('world↔screen, the multiplayer invariant [R3]', () => {
+  const VIEWPORTS: Viewport[] = [
+    { scale: 1, x: 0, y: 0 },
+    { scale: 0.25, x: -1234.5, y: 987.75 },
+    { scale: 4, x: -38_000, y: -22_500 }, // deep zoom, far into a 10,000 px world
+    { scale: 0.1, x: 640, y: -360 },
+  ]
+
+  const POINTS = [
+    { x: 0, y: 0 },
+    { x: 5000, y: 5000 },
+    { x: 9999.5, y: 0.25 },
+    { x: 123.456, y: 7890.123 },
+  ]
+
+  it('round-trips a world point through screen space at every scale and pan', () => {
+    for (const vp of VIEWPORTS) {
+      for (const p of POINTS) {
+        const back = screenToWorld(worldToScreen(p, vp), vp)
+
+        expect(back.x).toBeCloseTo(p.x, 9)
+        expect(back.y).toBeCloseTo(p.y, 9)
+      }
+    }
+  })
+
+  it('round-trips the other way too — a screen pixel is stable through world space', () => {
+    // The direction the publisher actually runs: pointer pixel → world → onto the wire.
+    for (const vp of VIEWPORTS) {
+      const pixel = { x: 947, y: 213 }
+      const back = worldToScreen(screenToWorld(pixel, vp), vp)
+
+      expect(back.x).toBeCloseTo(pixel.x, 9)
+      expect(back.y).toBeCloseTo(pixel.y, 9)
+    }
+  })
+
+  it('resolves one shared world point correctly under two different viewports', () => {
+    // This is the whole of R3 in one assertion. A publishes what is under its pointer;
+    // B renders it under B's own transform. What has to agree is the *world* point —
+    // the pixel must not, and the second half of this test is what stops the first half
+    // passing vacuously under a broken screen-coordinate implementation.
+    const a: Viewport = { scale: 1, x: 0, y: 0 }
+    const b: Viewport = { scale: 2.5, x: -3000, y: 1200 }
+    const pointerA = { x: 640, y: 360 }
+
+    const shared = screenToWorld(pointerA, a)
+    const pixelB = worldToScreen(shared, b)
+
+    expect(screenToWorld(pixelB, b).x).toBeCloseTo(shared.x, 9)
+    expect(screenToWorld(pixelB, b).y).toBeCloseTo(shared.y, 9)
+
+    // Broadcasting screen coordinates would have put B's arrow at pointerA. It doesn't
+    // belong anywhere near there.
+    expect(Math.abs(pixelB.x - pointerA.x)).toBeGreaterThan(100)
+    expect(Math.abs(pixelB.y - pointerA.y)).toBeGreaterThan(100)
+  })
+
+  it('survives a 2000 px pan — acceptance item 6, without opening two browsers', () => {
+    for (const scale of [0.25, 1, 4]) {
+      const vp: Viewport = { scale, x: 0, y: 0 }
+      const panned = panBy(vp, -2000, -2000)
+      const world = { x: 5000, y: 5000 }
+
+      // The pixel moves by exactly the pan…
+      expect(worldToScreen(world, panned).x).toBeCloseTo(worldToScreen(world, vp).x - 2000, 9)
+      expect(worldToScreen(world, panned).y).toBeCloseTo(worldToScreen(world, vp).y - 2000, 9)
+
+      // …and the world point does not move at all, which is the half that matters: it
+      // is what goes on the wire, so both browsers land on the same point regardless of
+      // how far apart they have panned.
+      const back = screenToWorld(worldToScreen(world, panned), panned)
+      expect(back.x).toBeCloseTo(world.x, 9)
+      expect(back.y).toBeCloseTo(world.y, 9)
+    }
+  })
+
+  it('agrees with the split transform the cursor overlay renders through', () => {
+    // Cursor.tsx applies the pan on the overlay layer and the scale on each cursor, so
+    // that a local pan is instant while remote motion keeps its 60 ms CSS smoothing
+    // [R21]. That is only legitimate if the two halves compose back to worldToScreen.
+    for (const vp of VIEWPORTS) {
+      for (const p of POINTS) {
+        const scaled = worldToScreen(p, { scale: vp.scale, x: 0, y: 0 })
+        const full = worldToScreen(p, vp)
+
+        expect(scaled.x + vp.x).toBeCloseTo(full.x, 9)
+        expect(scaled.y + vp.y).toBeCloseTo(full.y, 9)
+      }
+    }
   })
 })

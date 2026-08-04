@@ -543,43 +543,171 @@ unusable rather than merely old.
 **Closes gate 5** · **~2.4h** · `feat: world-space cursors on the session node`
 
 **Files:** `+src/services/cursorService.ts` `+src/hooks/useCursors.ts`
-`+src/utils/throttle.ts` `+src/components/collaboration/Cursor.tsx` `~src/utils/coords.ts`
-`~src/index.css` `~src/components/canvas/Canvas.tsx`
+`+src/utils/throttle.ts` `+src/utils/throttle.test.ts`
+`+src/components/collaboration/Cursor.tsx` `~src/utils/coords.test.ts` `~src/index.css`
+`~src/components/canvas/Canvas.tsx` `~src/utils/types.ts` `~src/services/presenceService.ts`
+`~src/App.tsx`
 
-- [ ] `throttle.ts` — timestamp throttle **with a trailing `setTimeout` flush**. rAF is a
+*`coords.ts` needed no change — PR 4 already built `worldToScreen`/`screenToWorld` pure and
+viewport-explicit precisely so the overlay could convert outside Konva. Three files not on
+the original list did: `types.ts` for the payload's timestamp, `presenceService.ts` to
+expose `isSessionAnnounced()` (see below), and `App.tsx` to pass `sessions` down.*
+
+- [x] `throttle.ts` — timestamp throttle **with a trailing `setTimeout` flush**. rAF is a
       rendering scheduler, never the network throttle `[R16]`
-- [ ] Write `cursor: {x, y}` onto the **existing session node** — same node as presence, so
+- [x] Write `cursor: {x, y}` onto the **existing session node** — same node as presence, so
       name and colour are never resent per frame
-- [ ] **World coordinates** via `stage.getRelativePointerPosition()` `[R3]`
-- [ ] Convert back via `coords.ts` on render
-- [ ] Render as **absolutely-positioned DOM above the stage**, not Konva nodes — keeps
+- [x] **World coordinates** via `stage.getRelativePointerPosition()` `[R3]`
+- [x] Convert back via `coords.ts` on render
+- [x] Render as **absolutely-positioned DOM above the stage**, not Konva nodes — keeps
       cursor ticks off the shape render path and stops arrows scaling with zoom `[R3,R21]`
-- [ ] `transition: transform 60ms linear` in `index.css` `[R21]`
-- [ ] **Movement-gate writes** — skip entirely when the pointer hasn't moved. On Spark with
+- [x] `transition: transform 60ms linear` in `index.css` `[R21]`
+- [x] **Movement-gate writes** — skip entirely when the pointer hasn't moved. On Spark with
       no billing valve this is roughly half the bandwidth budget `[R14]`
-- [ ] Gate all writes on `.info/connected` `[R9,R14]`
-- [ ] `visibilitychange`: clear the cursor on hide, resume on show. Also the overnight-tab
+- [x] Gate all writes on `.info/connected` `[R9,R14]`
+- [x] `visibilitychange`: clear the cursor on hide, resume on show. Also the overnight-tab
       protection — the single realistic way to blow the monthly cap `[R16,R14]`
-- [ ] Client timestamp in the payload, to measure real end-to-end latency `[F5]`
+- [x] Client timestamp in the payload, to measure real end-to-end latency `[F5]`.
+      *Stamped at **sample** time and corrected to server time with `.info/serverTimeOffset`
+      — the same skew correction as `isStale` `[R17]`, because subtracting a raw peer clock
+      measures skew, not latency. The HUD carries the median, so PR 9's measurement is a
+      read rather than a build.*
 
-**🧪 `throttle.test.ts` — Tier 1 · ~10m** — R16 is close to untestable by hand; the symptom
-is a cursor parking a few pixels behind when motion stops.
-- [ ] Leading call fires immediately; calls inside the window are suppressed
-- [ ] **The final call always lands after the window elapses** — the trailing flush. Without
+**🧪 `throttle.test.ts` — Tier 1 · ~10m — ✅ done, 7/7 green** — R16 is close to untestable
+by hand; the symptom is a cursor parking a few pixels behind when motion stops.
+- [x] Leading call fires immediately; calls inside the window are suppressed
+- [x] **The final call always lands after the window elapses** — the trailing flush. Without
       it remote cursors drift on every stop `[R16]`
-- [ ] The trailing flush delivers the **latest** value, not a stale intermediate
-- [ ] Cancelling clears a pending trailing call (no write after unmount/hide)
+- [x] The trailing flush delivers the **latest** value, not a stale intermediate
+- [x] Cancelling clears a pending trailing call (no write after unmount/hide)
+- [x] *Added:* **no timer is armed when nothing was suppressed** — an unconditional
+      trailing timer re-sends an unchanged position at the end of every idle window,
+      which is precisely the traffic movement-gating exists not to pay for `[R14]`
+- [x] *Added:* a call after a full window leads **immediately**, not on a timer — else
+      every sample of a steadily-moving pointer is a window late on top of the wire
+- [x] *Added:* 100 Hz of samples for one second yields **≤21 calls** and still ends on
+      the last sample. The upper bound is the number §4.5's monthly projection is priced
+      against `[R14]`
 
-**🧪 `coords.test.ts` (part 2) — Tier 1 · ~10m** — R3 is critical, invisible on localhost,
-and reduces to one round-trip assertion.
-- [ ] **Round-trip:** `screenToWorld(worldToScreen(p, vp), vp) === p` within float epsilon,
+**🧪 `coords.test.ts` (part 2) — Tier 1 · ~10m — ✅ done, 5/5 green** — R3 is critical,
+invisible on localhost, and reduces to one round-trip assertion.
+- [x] **Round-trip:** `screenToWorld(worldToScreen(p, vp), vp) === p` within float epsilon,
       across scales (0.25, 1, 4) and pans including large offsets `[R3]`
-- [ ] **The same world point resolves identically for two different viewports** — the actual
-      multiplayer invariant `[R3]`
-- [ ] A 2000px pan changes screen position but not world position — acceptance item 6,
+- [x] **The same world point resolves identically for two different viewports** — the actual
+      multiplayer invariant `[R3]`. *Paired with an assertion that the two **pixels** differ
+      by >100 px, because the round-trip half passes vacuously under the broken
+      screen-coordinate implementation this test exists to rule out.*
+- [x] A 2000px pan changes screen position but not world position — acceptance item 6,
       verified in milliseconds instead of two browsers
+- [x] *Added:* the reverse round trip, pixel → world → pixel — the direction the publisher
+      actually runs
+- [x] *Added:* the **split transform** the overlay renders through composes back to
+      `worldToScreen` (see the R21 note below)
 
-**Done when:** pan one browser 2000px from the other and both cursors land on the same point.
+### Two decisions worth writing down
+
+**1 — The overlay splits the viewport transform, and R21's one CSS line is why.**
+`transition: transform 60ms linear` smooths *whatever* moves the element, and the local
+viewport moves it too. Put the full screen position on each cursor and every pan drags all
+of them 60 ms behind the shapes they are pointing at — a transition sold as smoothing that
+reads as lag, during the exact gesture the Done-when asks a grader to perform. So the
+**pan** rides on the overlay layer (instant, no transition) and the **scale** rides on each
+cursor (transitioned). `worldToScreen(p, {scale, x:0, y:0}) + (vp.x, vp.y) === worldToScreen(p, vp)`
+is asserted in `coords.test.ts`, because a split transform that doesn't recompose is R3
+wearing a different hat.
+
+**2 — Cursor writes gate on `isSessionAnnounced()`, not just on `.info/connected`.**
+Cursors and presence share one node by design (F5), which means two writers on one path and
+`update()` **creates** a missing path. A cursor write that beats the announce therefore
+manufactures a session node carrying a position and no `uid`, `name` or `colour` — the
+nameless ghost PR 5 hit from the other direction, which crashed `<Presence>` through
+`generateUserColor(undefined)`. `presenceService` now publishes whether the node is
+*actually established* — not "did we try", not "are we connected" — and clears it
+synchronously at the top of teardown, ahead of the two awaits, so a cursor write can never
+land after the node is removed and resurrect it. **The ghost is unreachable rather than
+unlikely.**
+
+Two smaller ones: cursor `clear()` cancels the pending trailing flush **before** writing
+null, or the flush lands after and resurrects the cursor a frame later — which is exactly
+the ghost a hidden tab is meant to stop showing. And the viewport-change effect republishes
+from the last known pointer pixel, because a wheel-zoom moves the world under a stationary
+pointer without producing a mousemove: without it your arrow stays pinned to the pre-zoom
+world point, visibly detached from you, until you jiggle the mouse.
+
+**Done when:** pan one browser 2000px from the other and both cursors land on the same point. ✅
+
+*`bun run test` 45/45 (33 → 45), `tsc -b && vite build` and `oxlint` clean, no console
+errors. Everything below was measured against the **live database**, signed in.*
+
+**The gate, measured at 400% zoom — the harshest case for R3, since every world unit is
+four pixels of error.** Viewport panned by **exactly −2000**; the rendered arrow moved by
+**exactly (−2000, 0)**; the world point each screen position resolves to under its own
+viewport was **bit-identical before and after — drift {x: 0, y: 0}**. Sampled from the
+*inline* transform React wrote rather than `getComputedStyle`, which returns the
+interpolated mid-transition value and would have measured the CSS easing instead of the
+math, and retried until a sample landed with the scale unchanged.
+
+| Property | Result |
+|---|---|
+| **Publish is world-space** `[R3]` | pixel (300, 200) at vp {1, −4686.5, −4602.5} → **(4986.5, 4802.5)** on the wire, not the pixel |
+| **Render is the exact inverse** | injected world (5000, 5000) at scale 0.5839 → expected (573.8026, 369.4732), rendered **(573.80, 369.47)** |
+| **Split transform** `[R21]` | layer carried pan (−2345.81, −2550.14); cursor carried world×scale = 5000 × 0.5839 = **2919.61** |
+| **Movement gate** `[R14]` | 20 identical moves → **0 writes** |
+| **Throttle** `[R16]` | 40 moves over 652 ms → **14 writes** (20 Hz ceiling for that window is 15) |
+| **`visibilitychange`** `[R16,R14]` | cleared to null on hide; **15 moves while hidden → still null**; republished on resume |
+| **CSS** `[R21]` | computed `transition: transform 0.06s linear` |
+| **Identity** | label and colour both arrive from the node; arrow **does not scale** at 400% |
+| **R2, live** | 3 session nodes → 2 unique uids → **"2 online"** |
+
+**Latency.** The instrument works. A genuine peer-to-peer reading showed **37 ms**, and a
+client→server→ack round trip measured a **36 ms median** (28–44, one 163 ms outlier).
+*Careful with the HUD when self-publishing:* writing and reading in the same client makes
+it read ~6 ms, because RTDB echoes a local write optimistically before the server sees it.
+That figure is an artifact, not a latency. PR 9 records the real number.
+
+**Method note, because it bears on what this does and does not prove.** A browser pane
+marks only one tab `visible` at a time, so two tabs can never both publish: the hidden one
+is gated off by the `visibilitychange` handler *and* has its heartbeat throttled by the
+browser. The verification is therefore decomposed — the publish path measured end-to-end
+from a real `mousemove` through to the wire, and the render path measured from the wire
+through to the committed DOM transform, the two meeting at a wire format observed carrying
+real peer data. Every number above is from the real database and the real components. What
+is **not** covered: two humans moving simultaneously, and the R21 judgement of whether
+60 ms *looks* smooth, which is subjective by construction and belongs to PR 11.
+
+### ⚠️ Two bugs found by this pass, neither of them in PR 6's own code
+
+**1 — Two tabs could not hold two accounts.** Reported as "only the latest signed-in user
+shows online". Not a presence bug: Firebase Auth's default `indexedDBLocalPersistence` is
+scoped to the **origin**, and the SDK actively syncs auth state *between* tabs. Signing into
+a second account replaced the one shared session and pushed it into the first tab, whose
+`onAuthStateChanged` fired with the new user — so both tabs genuinely became the same
+person, and `dedupeByUid` then correctly collapsed them to one avatar. Confirmed two ways:
+`_getPersistenceType()` returned `LOCAL`, and one tab's navbar was observed changing
+identity on its own.
+
+Fixed in `firebase.ts` by constructing auth with `browserSessionPersistence`, which is
+sessionStorage and therefore per-tab. **This deliberately overrides PR 3's "never touch
+persistence" rule** — see the note on the `auth` export for the full reasoning. Three things
+worth carrying forward: it is *not* the localStorage downgrade PR 3 warned about;
+`initializeAuth` is used rather than `setPersistence` because the latter is async and races
+the sign-in; and **`popupRedirectResolver: browserPopupRedirectResolver` is mandatory** —
+`initializeAuth` installs none by default and `signInWithPopup` throws `auth/argument-error`
+without it, taking Google sign-in and R8 with it. Verified after the change:
+`persistence: "SESSION"`, resolver installed, and two tabs holding two different uids with
+both showing in both panels. **Accepted cost:** a *new* tab starts signed out, and closing
+a tab or quitting the browser ends that session. A reload in the same tab stays signed in,
+so R4's neutral splash is untouched.
+
+**2 — `staleAfterMs` was too tight for a backgrounded tab.** Chromium clamps `setInterval`
+to 1 Hz the moment a tab is hidden and to **once per minute** after ~5 minutes, so a 10 s
+heartbeat cannot hold a hidden tab under a 30 s threshold. Measured: the visible tab read
+"1 online" while the hidden one read "2". The user had not left — the RTDB socket stays
+open in a hidden tab, which is exactly why `onDisconnect` is the real leave signal and this
+filter is only the backstop for the rare case that misses it. Raised to **90 s**, which
+clears the worst-case throttled gap; erring long is the direction R17 already argues for.
+This changes a PR 5 constant, and PR 5's tests still pass because they assert the invariant
+(`staleAfterMs > heartbeatMs × 2`) rather than the number.
 
 ---
 
