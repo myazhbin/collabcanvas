@@ -96,7 +96,8 @@
       "Bash(sed -n '/### F6/,/### F7/p' PRD.md)",
       "Bash(sed -n '/\\\\*\\\\*R2 —/,/\\\\*\\\\*R3 —/p' PRD.md)",
       "Bash(sed -n '/\\\\*\\\\*R17 —/,/\\\\*\\\\*R18 —/p' PRD.md)",
-      "Bash(bunx firebase *)"
+      "Bash(bunx firebase *)",
+      "mcp__claude-in-chrome__list_connected_browsers"
     ]
   }
 }
