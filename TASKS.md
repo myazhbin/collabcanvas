@@ -350,11 +350,26 @@ which is the half of `[R8]` that only fails for someone who is not you. Sign-out
 been exercised either; it stays partly PR 5's, since the presence teardown it orders around
 does not exist yet `[R19]`.
 
-*Footnote on the popup, since it looks alarming and isn't:* in an embedded webview where
-`window.open` returns `null`, `signInWithPopup` never settled at all — no resolve, no
-`auth/popup-blocked` — leaving the button disabled with no error. That is the webview, not
-the app, and it does not reproduce in a real browser. It is still the exact shape R20 warns
-about, so a "your browser may be blocking popups" affordance is tracked separately.
+**Two popup footnotes, both of which look alarming and neither of which is a bug.**
+
+*1 — `Cross-Origin-Opener-Policy policy would block the window.closed call`, in the console
+on the production build, with a stack through Firebase's `pollUserCancellation`.* **This is
+R20's predicted false alarm, now proven rather than assumed.** `accounts.google.com` serves
+`cross-origin-opener-policy-report-only: same-origin` — note the **`-report-only`**, which
+is why Chrome says *would* block. Google is gathering telemetry on what an enforcing policy
+would break; nothing is blocked, `window.closed` returns its real value, Firebase's polling
+works, sign-in completes. Our own build sends **zero** `Cross-Origin-*` headers
+(`crossOriginIsolated === false`, no `vercel.json` / `_headers` / hosting block / Vite
+plugin anywhere in the repo). The warning is unsuppressible because the policy is on
+Google's origin, not ours. **Do not "fix" it by adding a COOP header** — it would not
+silence the message, and `same-origin` is precisely the header that turns R20 from a
+non-bug into a real one.
+
+*2 — a popup that never settles at all.* In an embedded webview where `window.open` returns
+`null`, `signInWithPopup` neither resolved nor rejected with `auth/popup-blocked`, leaving
+the button disabled with no error. That is the webview, not the app, and it does not
+reproduce in a real browser — but it is the exact shape R20 warns about, so a "your browser
+may be blocking popups" affordance is tracked separately.
 
 ---
 
