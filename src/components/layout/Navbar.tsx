@@ -1,6 +1,7 @@
 import { useState, useSyncExternalStore } from 'react'
 import { connectionStore } from '../../services/firebase'
 import { useAuth } from '../../hooks/useAuth'
+import { sessionId } from '../../utils/session'
 
 /**
  * User chip, connection badge, sign out. The badge takes over the temporary corner
@@ -43,7 +44,13 @@ export function Navbar() {
       </span>
 
       <div className="ml-auto flex items-center gap-3">
-        <span className="flex items-center gap-2" title={user?.email ?? undefined}>
+        {/* The session id rides along in the tooltip: two tabs of one account must show
+            two different ids, which is R2's keying made checkable before PR 5 renders it
+            as two presence entries. */}
+        <span
+          className="flex items-center gap-2"
+          title={`${user?.email ?? ''}\nsession ${sessionId.slice(0, 8)}`}
+        >
           <span className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-200 text-[10px] font-semibold text-neutral-700">
             {displayName.slice(0, 1).toUpperCase()}
           </span>

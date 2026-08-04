@@ -1,10 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
-import { Layer, Rect, Stage } from 'react-konva'
 import { AuthProvider } from './contexts/AuthContext'
 import { useAuth } from './hooks/useAuth'
 import { Login } from './components/auth/Login'
+import { Canvas } from './components/canvas/Canvas'
 import { Navbar } from './components/layout/Navbar'
-import { sessionId } from './utils/session'
 
 function App() {
   return (
@@ -28,7 +26,7 @@ function AuthGate() {
   return (
     <div className="flex h-full flex-col">
       <Navbar />
-      <CanvasSmokeTest />
+      <Canvas />
     </div>
   )
 }
@@ -42,53 +40,6 @@ function Splash() {
         <span className="h-4 w-4 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-500" />
         Loading CollabCanvas…
       </div>
-    </div>
-  )
-}
-
-/**
- * PR 1 smoke test [R18]: one hardcoded blue Rect in a Stage, to prove react-konva
- * renders against React 19. PR 4 replaces this with the real pannable/zoomable Canvas.
- *
- * The Stage is sized from a ResizeObserver rather than a one-shot read of
- * `window.innerWidth`: first paint can happen before layout, and a snapshot taken then
- * pins the canvas at 0×0 for the life of the page.
- */
-function CanvasSmokeTest() {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [size, setSize] = useState({ width: 0, height: 0 })
-
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-
-    const observer = new ResizeObserver(([entry]) => {
-      const { width, height } = entry.contentRect
-      setSize({ width, height })
-    })
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [])
-
-  return (
-    <div ref={containerRef} className="relative min-h-0 flex-1 bg-neutral-100">
-      <Stage width={size.width} height={size.height}>
-        <Layer>
-          <Rect
-            x={size.width / 2 - 120}
-            y={size.height / 2 - 80}
-            width={240}
-            height={160}
-            fill="#2563eb"
-          />
-        </Layer>
-      </Stage>
-
-      {/* Two tabs must show two different ids — that's the R2 keying, verified by eye
-          until PR 5 makes it visible as two presence entries. */}
-      <p className="absolute right-4 bottom-4 font-mono text-xs text-neutral-400">
-        session: {sessionId.slice(0, 8)}
-      </p>
     </div>
   )
 }

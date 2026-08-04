@@ -14,5 +14,17 @@ export const PALETTE = [
   '#ca8a04',
 ]
 
+/**
+ * 10%–400% per PRD F1. `step` is one mouse-wheel notch — a discrete detent, so a fixed
+ * multiplier is right. A trackpad pinch arrives as a stream of small deltas instead, so
+ * it scales exponentially with `pinchSensitivity` and stays proportional to the gesture.
+ */
+export const ZOOM = { min: 0.1, max: 4, step: 1.05, pinchSensitivity: 0.01 }
+
+/** World-space grid pitches, coarsest picked so lines stay ≥ `GRID_MIN_SCREEN_PX` apart
+ *  on screen. A fixed pitch either vanishes when zoomed out or turns solid. */
+export const GRID_PITCHES = [10, 20, 40, 80, 160, 320, 640, 1280, 2560]
+export const GRID_MIN_SCREEN_PX = 24
+
 /** Cursor/drag write interval. 20 Hz — the network throttle, never rAF [R16]. */
 export const THROTTLE_MS = 50

@@ -336,11 +336,25 @@ cannot reproduce manually. Use `vi.useFakeTimers()`.
 **Done when:** signup, email login, and Google login all work **on the deployed URL** from
 a fresh incognito window — and Google works from a **non-owner** account `[R8]`.
 
-*Verified locally without credentials: login and signup screens render, no console errors,
-and the dev server sets no COOP/COEP header (the R20 precondition). `bun run test` 13/13,
-`tsc -b && vite build` and `oxlint` clean.* **Still open — needs a human at a keyboard:**
-the three sign-in round trips above, plus the non-owner Google check. Nothing in the
-signed-in branch (Navbar, sign-out) has executed against a real credential yet.
+*Verified: login and signup screens render with no console errors; the dev server sets no
+COOP/COEP header, so R20's actual trap is confirmed absent (`crossOriginIsolated === false`).
+**Email/password sign-in works** — driven through to the signed-in branch during PR 4, with
+the Navbar chip, the connection badge reading `Live`, and the canvas all rendering, and the
+session persisting across tabs. **Google sign-in works** — manually confirmed by the project
+owner. `bun run test` 13/13 at this point in the build, `tsc -b && vite build` and `oxlint`
+clean.*
+
+**Still open:** the round trips above were exercised on `localhost`, not the deployed URL
+from a fresh incognito window, and Google has not been tried from a **non-owner** account —
+which is the half of `[R8]` that only fails for someone who is not you. Sign-out has not
+been exercised either; it stays partly PR 5's, since the presence teardown it orders around
+does not exist yet `[R19]`.
+
+*Footnote on the popup, since it looks alarming and isn't:* in an embedded webview where
+`window.open` returns `null`, `signInWithPopup` never settled at all — no resolve, no
+`auth/popup-blocked` — leaving the button disabled with no error. That is the webview, not
+the app, and it does not reproduce in a real browser. It is still the exact shape R20 warns
+about, so a "your browser may be blocking popups" affordance is tracked separately.
 
 ---
 
@@ -349,22 +363,66 @@ signed-in branch (Navbar, sign-out) has executed against a real credential yet.
 
 **Files:** `+src/components/canvas/Canvas.tsx` `+src/utils/coords.ts` `~src/App.tsx`
 
-- [ ] `coords.ts` — **pure** `worldToScreen`, `screenToWorld`, `zoomAtPoint`, taking an
-      explicit `{ scale, x, y }` viewport. All viewport math lives here
-- [ ] Stage scale + position in component state. **Local-only, never synced** `[F1]`
-- [ ] Zoom-to-cursor on wheel, clamped ~10%–400%
-- [ ] Pan via space-drag / middle-drag / trackpad scroll
-- [ ] World bounds **10,000 × 10,000** from `constants.ts` `[F1]`
-- [ ] Separate `<Layer>`s from the start — shapes and cursors must never share one `[R7]`
-- [ ] Verify 60 FPS in DevTools during continuous pan and zoom
+- [x] `coords.ts` — **pure** `worldToScreen`, `screenToWorld`, `zoomAtPoint`, taking an
+      explicit `{ scale, x, y }` viewport. All viewport math lives here. *Plus `panBy`,
+      `centreOn` and `clampViewport`, which the bounded-world item below needs.*
+- [x] Stage scale + position in component state. **Local-only, never synced** `[F1]`
+- [x] Zoom-to-cursor on wheel, clamped ~10%–400% `[ZOOM.min .. ZOOM.max]`.
+      *A wheel notch is a discrete detent so it takes a fixed `ZOOM.step`; a pinch is a
+      stream of small deltas so it scales exponentially and tracks the gesture.*
+- [x] Pan via space-drag / middle-drag / trackpad scroll. *The Stage is deliberately not
+      `draggable` — a stage-wide drag-pan fires a click on release, which is R13's
+      phantom rectangle in PR 7. Move listeners live on `window`, so releasing the button
+      outside the canvas still ends the pan.*
+- [x] World bounds **10,000 × 10,000** from `constants.ts` `[F1]`. *Drawn, and enforced:
+      `clampViewport` stops the world being shoved off the edge, since "bounded, not
+      infinite" is otherwise only a claim. An adaptive grid makes motion legible — panning
+      an empty field reads as nothing happening.*
+- [x] Separate `<Layer>`s from the start — shapes and cursors must never share one `[R7]`.
+      *⚠️ Resolved against PR 6, which contradicts this: R3/R21 require cursors as
+      **DOM over the stage**, not Konva nodes, and PR 6's checklist says so twice. So the
+      layers here are backdrop + shapes, with a commented DOM slot where the cursor
+      overlay lands. Cursors still never share the shapes layer — they never touch the
+      canvas at all, which is strictly stronger than what this item asks for.*
+- [x] Verify 60 FPS in DevTools during continuous pan and zoom. *Measured from `rAF`
+      intervals instead — one gesture event per frame for 150 frames, which is what a
+      hand actually produces. Pan and zoom both held a **16.7 ms median / 17.6 ms worst,
+      0 frames over 20 ms** — identical to the idle baseline, so at this scene complexity
+      the viewport transform costs nothing measurable. PR 9 re-measures at 500 shapes,
+      which is where this number can actually move.*
 
-**🧪 `coords.test.ts` (part 1) — Tier 2 · ~10m**
-- [ ] **Zoom-to-cursor invariant:** the world point under the pointer before `zoomAtPoint`
+**🧪 `coords.test.ts` (part 1) — Tier 2 · ~10m — ✅ done, 9/9 green**
+- [x] **Zoom-to-cursor invariant:** the world point under the pointer before `zoomAtPoint`
       is still under it after. Assert across several scales — the single easiest piece of
-      viewport math to get subtly wrong
-- [ ] Scale clamps hold at both ends; zoom-out at min scale is a no-op
+      viewport math to get subtly wrong. *Asserted across four scales × three factors
+      **with a pan already applied**: measuring the anchor at the new scale instead of the
+      old is exact at scale 1 with no offset, which is the one case you would try by hand.*
+- [x] Scale clamps hold at both ends; zoom-out at min scale is a no-op. *The no-op is
+      asserted as object **identity**, so repeated blocked ticks can neither accumulate
+      float drift in the offset nor churn React state.*
+- [x] *Added:* `clampViewport` pins the world to the stage edge, leaves a legal viewport
+      untouched, and centres per-axis once the world fits — the mixed case (fits across,
+      not down) is where a shared branch gets one axis wrong.
 
-**Done when:** pan and zoom are smooth and the viewport does not sync between browsers.
+**Done when:** pan and zoom are smooth and the viewport does not sync between browsers. ✅
+
+*Driven in the browser against the running app, signed in. Zoom-to-cursor: **zero drift**
+across four wheel ticks at an off-centre probe. Clamps: hard stops at exactly 400% and
+10%. Gesture split: trackpad-shaped deltas pan by exactly `(-deltaX, -deltaY)` without
+touching scale, ctrl+wheel zooms. Pan: space-drag and middle-drag each moved the stage by
+exactly the pointer delta; **plain left-drag moved nothing**, which is R13's guard already
+holding before PR 7 needs it. Bounds: pinned at exactly `(0, 0)` shoved past the top-left
+and at `(stage − world·scale)` past the bottom-right. Two tabs of the same account, one
+panned to 163% at a different offset — **the other did not move**, which is F1's
+local-only requirement. `bun run test` 22/22, build and lint clean.*
+
+**Found and fixed during that pass — a real bug the unit tests could not see.** The
+canvas opened on the world's **top-left corner** rather than the middle. The centring
+effect flipped its `centred` ref *inside* the `setViewport` updater; React invokes
+updaters more than once, and StrictMode does it deliberately to surface exactly this, so
+the second pass read its own first pass's write and took the "already centred" branch.
+The ref flip now happens in the effect body, where it belongs. Worth noting for PR 5–8:
+**every** ref mutation inside a state updater has this bug, and it survives unit tests.
 
 ---
 
