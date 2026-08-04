@@ -26,5 +26,14 @@ export const ZOOM = { min: 0.1, max: 4, step: 1.05, pinchSensitivity: 0.01 }
 export const GRID_PITCHES = [10, 20, 40, 80, 160, 320, 640, 1280, 2560]
 export const GRID_MIN_SCREEN_PX = 24
 
+/**
+ * Presence timings. The heartbeat is the only thing that keeps a node looking alive, so
+ * `staleAfterMs` has to tolerate a couple of missed beats — Firebase publishes no
+ * ungraceful-disconnect timeout, and this filter is the backstop for a client that died
+ * without `onDisconnect` firing. `sweepMs` re-evaluates staleness on a timer, because a
+ * peer that stops sending never triggers a listener callback to recompute it.
+ */
+export const PRESENCE = { heartbeatMs: 10_000, staleAfterMs: 30_000, sweepMs: 5_000 }
+
 /** Cursor/drag write interval. 20 Hz — the network throttle, never rAF [R16]. */
 export const THROTTLE_MS = 50

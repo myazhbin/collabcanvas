@@ -92,7 +92,11 @@
       "Bash(xargs -I{} node -e \"const p=require\\('{}'\\); if\\(p.name&&p.name.includes\\('konva'\\)\\)console.log\\('{}', p.version\\)\")",
       "mcp__claude-in-chrome__tabs_context_mcp",
       "Bash(curl -sI http://localhost:4173/)",
-      "Bash(curl -sI \"https://accounts.google.com/o/oauth2/auth\")"
+      "Bash(curl -sI \"https://accounts.google.com/o/oauth2/auth\")",
+      "Bash(sed -n '/### F6/,/### F7/p' PRD.md)",
+      "Bash(sed -n '/\\\\*\\\\*R2 —/,/\\\\*\\\\*R3 —/p' PRD.md)",
+      "Bash(sed -n '/\\\\*\\\\*R17 —/,/\\\\*\\\\*R18 —/p' PRD.md)",
+      "Bash(bunx firebase *)"
     ]
   }
 }

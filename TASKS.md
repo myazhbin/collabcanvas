@@ -449,37 +449,93 @@ The ref flip now happens in the effect body, where it belongs. Worth noting for 
 `+src/components/collaboration/Presence.tsx` `~src/components/layout/Navbar.tsx`
 `~src/contexts/AuthContext.tsx`
 
-- [ ] `presenceUtils.ts` — **pure** `dedupeByUid(nodes)` and `isStale(lastSeen, now, offset)`
-- [ ] Write `/sessions/global-canvas-v1/{sessionId}` — **keyed by sessionId, uid as a
+- [x] `presenceUtils.ts` — **pure** `dedupeByUid(nodes)` and `isStale(lastSeen, now, offset)`
+- [x] Write `/sessions/global-canvas-v1/{sessionId}` — **keyed by sessionId, uid as a
       field** `[R2]`
-- [ ] Register `onDisconnect().remove()` **inside** the `.info/connected` callback and
-      **await it before** writing the online value `[R9]`
-- [ ] 10s heartbeat writing `lastSeen` with **RTDB's** `serverTimestamp()` — a different
+- [x] Register `onDisconnect().remove()` **inside** the `.info/connected` callback and
+      **await it before** writing the online value `[R9]`. *`announced` also resets to
+      false whenever the socket drops, so a reconnect re-arms rather than assuming the
+      server-side handler survived.*
+- [x] 10s heartbeat writing `lastSeen` with **RTDB's** `serverTimestamp()` — a different
       import from Firestore's identically-named sentinel; mixing them writes an object that
       never resolves `[R17]`
-- [ ] `helpers.ts` — `generateUserColor(uid)`, deterministic and stable
-- [ ] `Presence.tsx` — dedupe by `uid`; distinguish yourself
-- [ ] Connection badge in the Navbar — "Reconnecting…" when `.info/connected` is false
-- [ ] Complete the sign-out teardown ordering from PR 3 `[R19]`
+- [x] `helpers.ts` — `generateUserColor(uid)`, deterministic and stable
+- [x] `Presence.tsx` — dedupe by `uid`; distinguish yourself
+- [x] Connection badge in the Navbar — "Reconnecting…" when `.info/connected` is false
+      *(landed early, in PR 3)*
+- [x] Complete the sign-out teardown ordering from PR 3 `[R19]` — `leavePresence` is passed
+      into `authService.logOut`, so cancel → remove → `signOut` in that order
 
-**🧪 `presenceUtils.test.ts` — Tier 1 · ~15m** — two of the highest-value assertions in the
-plan; both encode gate-failing risks and neither is obvious from the code.
-- [ ] **Two sessionIds sharing one uid collapse to ONE presence entry** — while the caller
+**⚠️ The Done-when below contradicts F6, and F6 wins.** "Two tabs appear as two users"
+is the opposite of PRD F6 (*"Online list is derived by uniquing on `uid`; one cursor
+renders per `sessionId`"*), of this PR's own first test, and of PR 11 item 15 (*"two tabs,
+same browser → two **cursors**"*). Built to F6: two tabs of one account are **two session
+nodes and one avatar**. The R2 property that actually matters — closing one tab not
+deleting the other's presence — holds either way, and is what got measured.
+
+**🧪 `presenceUtils.test.ts` — Tier 1 · ~15m — ✅ done, 9/9 green** — two of the
+highest-value assertions in the plan; both encode gate-failing risks and neither is obvious
+from the code.
+- [x] **Two sessionIds sharing one uid collapse to ONE presence entry** — while the caller
       still has two cursor keys. R2 as an assertion `[R2]`
-- [ ] `dedupeByUid` preserves distinct uids and is order-independent
-- [ ] **`isStale` fails OPEN:** missing, null, or unparseable `lastSeen` → `false` (show
+- [x] `dedupeByUid` preserves distinct uids and is order-independent. *Asserted as the same
+      **sequence**, not just the same set — RTDB promises no key order, and a list that
+      reorders on each heartbeat is a visibly twitchy avatar stack.*
+- [x] **`isStale` fails OPEN:** missing, null, or unparseable `lastSeen` → `false` (show
       the user). An empty presence list is a failed gate item; a ghost is a blemish `[R17]`
-- [ ] **Clock skew:** with the viewer's clock 2 minutes fast, a fresh `lastSeen` is **not**
+- [x] **Clock skew:** with the viewer's clock 2 minutes fast, a fresh `lastSeen` is **not**
       stale once `serverTimeOffset` is applied — and *is* wrongly stale without it. Assert
       both, so the test documents why the offset exists `[R17]`
-- [ ] A genuinely old `lastSeen` (>30s) is stale
+- [x] A genuinely old `lastSeen` (>30s) is stale
+- [x] *Added:* tie-broken dedupe is order-independent too, and one missed heartbeat does
+      **not** evict a live user — `staleAfterMs > heartbeatMs × 2` is asserted, not assumed
 
-**🧪 `helpers.test.ts` — Tier 2 · ~3m**
-- [ ] Same uid → same colour across calls (determinism is the whole contract)
-- [ ] Always a valid colour string, including for empty/odd uids
+**🧪 `helpers.test.ts` — Tier 2 · ~3m — ✅ done, 3/3 green**
+- [x] Same uid → same colour across calls (determinism is the whole contract)
+- [x] Always a valid colour string, including for empty/odd uids
+- [x] *Added:* uids spread across the whole palette — a hash that always returned index 0
+      would be deterministic, palette-valid, and useless
 
 **Done when:** two browsers see each other within 2s; closing a tab clears within 2s; and
-**two tabs of the same browser appear as two users** `[R2]`.
+two tabs of the same browser are two sessions (see the F6 correction above). ✅
+
+*Measured against the live database, signed in. **R2:** two tabs → **2 session nodes, 1
+unique uid**, and both tabs rendered a single avatar reading "1 online". **Leave:** closing
+a tab removed its node via `onDisconnect`, seen gone on the next poll. **R19 sign-out:**
+node cleared **1075 ms after the click** with **zero console errors or warnings** — no
+permission-denied storm, because the uid-keyed effect drops the listener before the
+credential goes. `bun run test` 33/33, build and lint clean.*
+
+### ⚠️ R5 fired here — the deployed RTDB rules did not match the committed file
+
+The first code in the project to touch RTDB rules at all (`.info/*` is rules-exempt, which
+is why the connection badge read "Live" throughout PRs 2–4), and every `set` and `update`
+to `/sessions/global-canvas-v1/…` came back `permission_denied` while
+`database.rules.json` — byte-identical to PRD §4.4, emulator-verified in PR 2 — plainly
+allowed them. Fixed with `bunx firebase deploy --only database`, which is the mechanism PR 2
+designated when it made the committed files the source of truth. **Console state had
+drifted from the repo, exactly as R5 predicts; the emulator test could never have caught it,
+because it tests the file.**
+
+**Three bugs in the first cut of `presenceService`, all found by that outage and all
+survivable on their own — which is why they are worth writing down:**
+
+1. **The announce only ran on a `.info/connected` transition.** That callback fires once per
+   connection, so a single failed announce was permanent. It now retries from the heartbeat,
+   which makes presence self-healing after any transient denial or network fault.
+2. **The heartbeat `update` *created* the node.** With the announce failed, a bare
+   `lastSeen` write manufactured a session node carrying no `uid`, `name` or `colour` — a
+   nameless ghost that every other client then had to defend against, and which crashed
+   `<Presence>` through `generateUserColor(undefined)`. The heartbeat now re-announces
+   instead of beating a node that was never established.
+3. **Errors inside the serialised write were swallowed**, so none of the above was visible.
+   Both the announce and the `onValue` listener now log loudly and name R5 by number,
+   because a silent denial is indistinguishable from "nobody else is here" — and that
+   silence is most of what makes this class of bug expensive.
+
+`usePresence` also drops nodes with no `uid` on the way in. That is *not* the staleness
+filter, which must fail open `[R17]`; it is a separate trust boundary for wire data that is
+unusable rather than merely old.
 
 ---
 

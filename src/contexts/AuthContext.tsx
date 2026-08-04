@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { onAuthStateChanged, type User } from 'firebase/auth'
 import { auth } from '../services/firebase'
 import * as authService from '../services/authService'
+import { leavePresence } from '../services/presenceService'
 import {
   authReducer,
   initialAuthState,
@@ -77,8 +78,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logOut = useCallback(async () => {
     setCapturedName(null)
-    // PR 5 passes the presence teardown through here, ahead of `signOut` [R19].
-    await authService.logOut()
+    // The R19 ordering, completed in PR 5: `leavePresence` cancels the `onDisconnect`
+    // and removes the session node, and only then does the credential drop. `signOut`
+    // does not close the RTDB socket, so `onDisconnect` never fires on a sign-out —
+    // reverse these two and you stay online to the other browser indefinitely, in
+    // exactly the demo a grader is running.
+    await authService.logOut(leavePresence)
   }, [])
 
   const getIdToken = useCallback(

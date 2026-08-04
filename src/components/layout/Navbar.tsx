@@ -1,14 +1,17 @@
 import { useState, useSyncExternalStore } from 'react'
 import { connectionStore } from '../../services/firebase'
 import { useAuth } from '../../hooks/useAuth'
+import { Presence } from '../collaboration/Presence'
+import { generateUserColor } from '../../utils/helpers'
+import type { PresenceNode } from '../../utils/presenceUtils'
 import { sessionId } from '../../utils/session'
 
 /**
- * User chip, connection badge, sign out. The badge takes over the temporary corner
- * readout from PR 2; PR 5 gives the chip its `generateUserColor` swatch and completes
- * the sign-out teardown behind the button [R19].
+ * Online stack, connection badge, user chip, sign out. `online` is passed in rather than
+ * pulled from `usePresence` here: that hook *publishes* this tab's session node as well
+ * as reading everyone's, so calling it twice would start two publishers.
  */
-export function Navbar() {
+export function Navbar({ online }: { online: PresenceNode[] }) {
   const { displayName, user, logOut } = useAuth()
   const { connected, offset } = useSyncExternalStore(
     connectionStore.subscribe,
@@ -43,15 +46,20 @@ export function Navbar() {
         {connected ? 'Live' : 'Reconnecting…'}
       </span>
 
-      <div className="ml-auto flex items-center gap-3">
-        {/* The session id rides along in the tooltip: two tabs of one account must show
-            two different ids, which is R2's keying made checkable before PR 5 renders it
-            as two presence entries. */}
+      <div className="ml-auto flex items-center gap-4">
+        <Presence online={online} />
+
+        {/* The session id rides along in the tooltip. Two tabs of one account must show
+            two *different* ids while collapsing to a single avatar in the stack above —
+            that pairing is R2, and this is where you check it by hand. */}
         <span
           className="flex items-center gap-2"
           title={`${user?.email ?? ''}\nsession ${sessionId.slice(0, 8)}`}
         >
-          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-200 text-[10px] font-semibold text-neutral-700">
+          <span
+            style={{ backgroundColor: user ? generateUserColor(user.uid) : undefined }}
+            className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-200 text-[10px] font-semibold text-white"
+          >
             {displayName.slice(0, 1).toUpperCase()}
           </span>
           <span className="text-sm text-neutral-700">{displayName}</span>

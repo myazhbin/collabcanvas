@@ -1,5 +1,6 @@
 import { AuthProvider } from './contexts/AuthContext'
 import { useAuth } from './hooks/useAuth'
+import { usePresence } from './hooks/usePresence'
 import { Login } from './components/auth/Login'
 import { Canvas } from './components/canvas/Canvas'
 import { Navbar } from './components/layout/Navbar'
@@ -23,9 +24,23 @@ function AuthGate() {
   if (status === 'loading') return <Splash />
   if (status === 'signedOut') return <Login />
 
+  return <CanvasScreen />
+}
+
+/**
+ * `usePresence` lives here, above both consumers, because it *publishes* this tab's
+ * session node as well as reading everyone's — calling it in two components would start
+ * two publishers and two listeners. PR 6 takes `sessions` from the same call for cursors,
+ * which need one per session where the online list needs one per uid [R2].
+ *
+ * It also sits below the gate, so the listener mounts only once auth has resolved [R4].
+ */
+function CanvasScreen() {
+  const { online } = usePresence()
+
   return (
     <div className="flex h-full flex-col">
-      <Navbar />
+      <Navbar online={online} />
       <Canvas />
     </div>
   )
