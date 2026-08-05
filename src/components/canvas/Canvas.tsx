@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Layer, Rect, Shape, Stage } from 'react-konva'
+import { Layer, Stage } from 'react-konva'
 import type Konva from 'konva'
-import { GRID_MIN_SCREEN_PX, GRID_PITCHES, WORLD, ZOOM } from '../../utils/constants'
+import { WORLD, ZOOM } from '../../utils/constants'
 import {
   centreOn,
   clampViewport,
@@ -15,14 +15,17 @@ import {
 import { useCursors } from '../../hooks/useCursors'
 import { useCanvas } from '../../hooks/useCanvas'
 import { useAuth } from '../../hooks/useAuth'
+import { useWindowEvent } from '../../hooks/useWindowEvent'
 import { shouldPlace } from '../../utils/placement'
 import { collectRemoteDrags } from '../../utils/shapeDiff'
-import { canDrag, isLockedByOther } from '../../utils/shapeLocks'
+import { canDrag, lockHolder } from '../../utils/shapeLocks'
 import { generateUserColor } from '../../utils/helpers'
 import { sessionId } from '../../utils/session'
 import { Cursor } from '../collaboration/Cursor'
-import { Rectangle } from './Rectangle'
+import { Backdrop } from './Backdrop'
 import { Controls } from './Controls'
+import { Hud } from './Hud'
+import { Rectangle } from './Rectangle'
 import type { SessionNode } from '../../utils/types'
 
 /**
@@ -74,9 +77,8 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
   const lockColours = useMemo(() => {
     const colours = new Map<string, string>()
     for (const shape of shapes) {
-      if (isLockedByOther(shape, myUid, liveUids) && shape.draggedBy) {
-        colours.set(shape.id, generateUserColor(shape.draggedBy))
-      }
+      const holder = lockHolder(shape, myUid, liveUids)
+      if (holder) colours.set(shape.id, generateUserColor(holder))
     }
     return colours
   }, [shapes, myUid, liveUids])
@@ -130,62 +132,45 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
     setViewport((vp) => clampViewport(vp, size))
   }, [size])
 
-  // Space is the pan modifier, so it must not also scroll the page or re-fire the
-  // focused button. Guarded on the focus target, or Space stops activating the Sign out
-  // button for a keyboard user.
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code !== 'Space' || e.repeat || isInteractiveTarget(e.target)) return
-      e.preventDefault()
-      setSpaceHeld(true)
-    }
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space') setSpaceHeld(false)
-    }
-    // A window that loses focus mid-hold never delivers the keyup, which would leave the
-    // canvas stuck in pan mode until you pressed and released space again.
-    const onBlur = () => setSpaceHeld(false)
+  // ---- Space: the pan modifier -------------------------------------------------------
+  // It must not also scroll the page or re-fire the focused button, so the keydown is
+  // guarded on the focus target — otherwise Space stops activating the Sign out button
+  // for a keyboard user.
+  useWindowEvent('keydown', (e) => {
+    if (e.code !== 'Space' || e.repeat || isInteractiveTarget(e.target)) return
+    e.preventDefault()
+    setSpaceHeld(true)
+  })
+  useWindowEvent('keyup', (e) => {
+    if (e.code === 'Space') setSpaceHeld(false)
+  })
+  // A window that loses focus mid-hold never delivers the keyup, which would leave the
+  // canvas stuck in pan mode until you pressed and released space again.
+  useWindowEvent('blur', () => setSpaceHeld(false))
 
-    window.addEventListener('keydown', onKeyDown)
-    window.addEventListener('keyup', onKeyUp)
-    window.addEventListener('blur', onBlur)
-    return () => {
-      window.removeEventListener('keydown', onKeyDown)
-      window.removeEventListener('keyup', onKeyUp)
-      window.removeEventListener('blur', onBlur)
-    }
-  }, [])
-
-  // Tracked on `window`, not the stage: releasing the button outside the canvas — or
-  // outside the browser entirely — otherwise never ends the pan, and the canvas keeps
-  // following the pointer after you let go.
-  useEffect(() => {
-    if (!panning) return
-
-    const onMove = (e: MouseEvent) => {
+  // ---- Pan ---------------------------------------------------------------------------
+  // Only while the button is down, and on `window` rather than the stage: releasing
+  // outside the canvas — or outside the browser entirely — otherwise never ends the pan,
+  // and the canvas keeps following the pointer after you let go.
+  useWindowEvent(
+    'mousemove',
+    (e) => {
       const origin = panOrigin.current
       if (!origin) return
 
-      const next = panBy(
-        origin.viewport,
-        e.clientX - origin.pointer.x,
-        e.clientY - origin.pointer.y,
-      )
+      const next = panBy(origin.viewport, e.clientX - origin.pointer.x, e.clientY - origin.pointer.y)
       setViewport(clampViewport(next, size))
-    }
-
-    const onUp = () => {
+    },
+    panning,
+  )
+  useWindowEvent(
+    'mouseup',
+    () => {
       panOrigin.current = null
       setPanning(false)
-    }
-
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-  }, [panning, size])
+    },
+    panning,
+  )
 
   const onMouseDown = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent>) => {
@@ -224,44 +209,34 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
 
   // Resolved on `window`, so a release outside the canvas still ends the gesture — and
   // ends it as *nothing*, since the distance test will have failed by then.
-  useEffect(() => {
-    const onUp = (e: MouseEvent) => {
-      const g = gesture.current
-      gesture.current = null
-      if (!g || e.button !== 0) return
+  useWindowEvent('mouseup', (e) => {
+    const g = gesture.current
+    gesture.current = null
+    if (!g || e.button !== 0) return
 
-      // One predicate for both branches: it answers "was this a click on empty canvas?",
-      // which is the precondition for placing *and* for clearing the selection.
-      const wasBackgroundClick = shouldPlace({
-        down: g.down,
-        up: { x: e.clientX, y: e.clientY },
-        targetIsStage: g.targetIsStage,
-      })
-      if (!wasBackgroundClick) return
+    // One predicate for both branches: it answers "was this a click on empty canvas?",
+    // which is the precondition for placing *and* for clearing the selection.
+    const wasBackgroundClick = shouldPlace({
+      down: g.down,
+      up: { x: e.clientX, y: e.clientY },
+      targetIsStage: g.targetIsStage,
+    })
+    if (!wasBackgroundClick) return
 
-      if (tool === 'rectangle') placeAt(g.downWorld)
-      else select(null)
-    }
-
-    window.addEventListener('mouseup', onUp)
-    return () => window.removeEventListener('mouseup', onUp)
-  }, [tool, placeAt, select])
+    if (tool === 'rectangle') placeAt(g.downWorld)
+    else select(null)
+  })
 
   // Delete removes the selection. Guarded on the focus target, or Backspace stops working
   // as backspace the moment a shape is selected and the user clicks into a text field.
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return
-      if (!selectedId || isInteractiveTarget(e.target)) return
+  useWindowEvent('keydown', (e) => {
+    if (e.key !== 'Delete' && e.key !== 'Backspace') return
+    if (!selectedId || isInteractiveTarget(e.target)) return
 
-      // Backspace is browser-history-back on some setups if it reaches the document.
-      e.preventDefault()
-      deleteShape(selectedId)
-    }
-
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selectedId, deleteShape])
+    // Backspace is browser-history-back on some setups if it reaches the document.
+    e.preventDefault()
+    deleteShape(selectedId)
+  })
 
   // World coordinates, from Konva's own inverse of the stage transform [R3]. Screen
   // coordinates would be correct only while both viewports happen to match, and the
@@ -353,8 +328,8 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
       >
-        {/* Backdrop. `listening={false}` keeps 10,000 px of grid out of the hit graph,
-            so PR 7's placement guard still sees the Stage as the event target [R13]. */}
+        {/* `listening={false}` keeps 10,000 px of grid out of the hit graph, so PR 7's
+            placement guard still sees the Stage as the event target [R13]. */}
         <Layer listening={false}>
           <Backdrop viewport={viewport} size={size} />
         </Layer>
@@ -409,105 +384,6 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
   )
 }
 
-/** The world's extent and a grid to make motion legible — without a reference, panning
- *  an empty field reads as nothing happening. One `Rect` and one `Shape`, both static. */
-function Backdrop({ viewport, size }: { viewport: Viewport; size: Size }) {
-  const pitch = gridPitch(viewport.scale)
-  const topLeft = screenToWorld({ x: 0, y: 0 }, viewport)
-  const bottomRight = screenToWorld({ x: size.width, y: size.height }, viewport)
-
-  return (
-    <>
-      <Rect
-        x={0}
-        y={0}
-        width={WORLD.width}
-        height={WORLD.height}
-        fill="#ffffff"
-        stroke="#a3a3a3"
-        // Konva scales stroke width with the stage, so a plain 1 turns into a 4 px slab
-        // at 400% and vanishes at 10%.
-        strokeWidth={1 / viewport.scale}
-        perfectDrawEnabled={false}
-        shadowForStrokeEnabled={false}
-      />
-
-      <Shape
-        stroke="#e5e5e5"
-        strokeWidth={1 / viewport.scale}
-        perfectDrawEnabled={false}
-        shadowForStrokeEnabled={false}
-        sceneFunc={(context, shape) => {
-          // Only the lines actually on screen, clipped to the world. At 10% zoom the
-          // whole world is in view, and drawing every 10 px line would be 1000 of them.
-          const x0 = Math.max(Math.floor(topLeft.x / pitch) * pitch, 0)
-          const y0 = Math.max(Math.floor(topLeft.y / pitch) * pitch, 0)
-          const x1 = Math.min(bottomRight.x, WORLD.width)
-          const y1 = Math.min(bottomRight.y, WORLD.height)
-
-          context.beginPath()
-          for (let x = x0; x <= x1; x += pitch) {
-            context.moveTo(x, Math.max(topLeft.y, 0))
-            context.lineTo(x, y1)
-          }
-          for (let y = y0; y <= y1; y += pitch) {
-            context.moveTo(Math.max(topLeft.x, 0), y)
-            context.lineTo(x1, y)
-          }
-          context.fillStrokeShape(shape)
-        }}
-      />
-    </>
-  )
-}
-
-/** Zoom readout, pan hint, and the measured cursor latency. The first two answer the
- *  questions a grader asks in the first ten seconds; the third is F5's <50 ms target
- *  reported from the wire rather than assumed from the send rate. */
-function Hud({
-  viewport,
-  spaceHeld,
-  latencyMs,
-}: {
-  viewport: Viewport
-  spaceHeld: boolean
-  latencyMs: number | null
-}) {
-  return (
-    <div className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-3 rounded-lg bg-white/85 px-2.5 py-1.5 font-mono text-xs text-neutral-500 shadow-sm backdrop-blur-sm">
-      <span className="tabular-nums">{Math.round(viewport.scale * 100)}%</span>
-      <span className={spaceHeld ? 'text-neutral-900' : ''}>space-drag</span>
-      <span>middle-drag</span>
-      <span>scroll</span>
-      <span>·</span>
-      <span>wheel or pinch to zoom</span>
-
-      {latencyMs !== null && (
-        <>
-          <span>·</span>
-          {/* Median, and it includes the throttle's own sampling delay — F5 is explicit
-              that a 20 Hz send rate adds up to 50 ms before the wire and that the target
-              must not be recorded as met on the strength of the interval alone. */}
-          <span
-            title="median end-to-end cursor latency, measured from the payload timestamp"
-            className="tabular-nums"
-          >
-            {latencyMs} ms
-          </span>
-        </>
-      )}
-    </div>
-  )
-}
-
-/** Coarsest pitch that still leaves the lines at least `GRID_MIN_SCREEN_PX` apart. */
-function gridPitch(scale: number): number {
-  return (
-    GRID_PITCHES.find((pitch) => pitch * scale >= GRID_MIN_SCREEN_PX) ??
-    GRID_PITCHES[GRID_PITCHES.length - 1]
-  )
-}
-
 /**
  * A trackpad two-finger scroll and a mouse wheel arrive as the same event, and nothing
  * in the platform distinguishes them — but F1 wants the first to pan and the second to
@@ -531,6 +407,9 @@ function wheelIntent(e: WheelEvent): 'zoom' | 'pan' {
   return Math.abs(e.deltaY) >= 100 && Number.isInteger(e.deltaY) ? 'zoom' : 'pan'
 }
 
+/** Whether a key event belongs to something that already means something else — a form
+ *  field, a link, a button. Space and Backspace are both bound here and both are load
+ *  bearing elsewhere on the page. */
 function isInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
   return (

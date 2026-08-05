@@ -32,6 +32,9 @@ export type CanvasDoc = { shapes: Shape[] }
  */
 export type CursorPayload = { x: number; y: number; t: number }
 
+/** Which shape a session is dragging, and where it is right now. World coords. */
+export type DragPayload = { id: string; x: number; y: number }
+
 /** `/sessions/{CANVAS_ID}/{sessionId}` — one node per tab. */
 export type SessionNode = {
   uid: string
@@ -40,7 +43,7 @@ export type SessionNode = {
   /** World coords, so viewports may differ [R3]. */
   cursor: CursorPayload | null
   /** In-flight drag only; cleared after the Firestore commit lands. */
-  drag: { id: string; x: number; y: number } | null
+  drag: DragPayload | null
   /** RTDB serverTimestamp(), resolved to epoch ms by the server [R17]. */
   lastSeen: number
 }

@@ -1,16 +1,19 @@
-// Explicit extension: reached from the emulator tests via `shapeOps`, so this compiles
-// under tsconfig.node.json too — and that project is nodenext.
+// Explicit extension: reached from the emulator tests via `shapeOps`, and that project is
+// nodenext, where an extensionless relative import is an error.
 import type { Shape } from './types.ts'
 
 /**
- * The soft lock, as a predicate [R10].
+ * The soft lock, as one primitive [R10].
  *
  * PRD F4 settles conflicts with last-write-wins at the shape level, and plain LWW is *not*
  * adequate on its own: two people dragging one rectangle produce continuous oscillation as
  * each commit overwrites the other, not a rare self-correcting jump. `draggedBy` is what
  * makes LWW acceptable — the second person is locked out cleanly instead of fighting.
+ *
+ * Returns the uid actually keeping you out, so the caller can colour the outline with it,
+ * and `null` in all three ways a `draggedBy` fails to bind.
  */
-export function canDrag(
+export function lockHolder(
   shape: Pick<Shape, 'draggedBy'>,
   myUid: string | null,
   /**
@@ -18,15 +21,17 @@ export function canDrag(
    * locking a shape forever — see below.
    */
   liveUids?: ReadonlySet<string>,
-): boolean {
+): string | null {
+  const holder = shape.draggedBy
+
   // Free. The overwhelmingly common case, and `undefined` counts — a shape written before
   // the field existed, or one read back mid-write, must not be permanently unmovable.
-  if (shape.draggedBy === null || shape.draggedBy === undefined) return true
+  if (holder === null || holder === undefined) return null
 
-  // Yours already. Written as a bare truthiness check this reads as "locked" and you get
-  // locked out of the shape you are personally holding — which looks like the drag simply
-  // stopped working, and only on the second grab.
-  if (shape.draggedBy === myUid) return true
+  // Yours already. Written as a bare truthiness check the whole function reads as "locked"
+  // and you get locked out of the shape you are personally holding — which looks like the
+  // drag simply stopped working, and only on the second grab.
+  if (holder === myUid) return null
 
   /**
    * **Stale lock.** `draggedBy` lives in Firestore, and `onDisconnect` cannot reach it —
@@ -38,17 +43,19 @@ export function canDrag(
    * lock is a leftover and the shape is free. This is the mechanism by which
    * `onDisconnect` prevents a permanent lock [R10] — the RTDB node is the liveness proof
    * for a lock held in Firestore.
+   *
+   * Omitting the set is not evidence of anything, so it keeps honouring the lock: presence
+   * not having loaded yet must not silently unlock the whole canvas.
    */
-  if (liveUids && !liveUids.has(shape.draggedBy)) return true
+  if (liveUids && !liveUids.has(holder)) return null
 
-  return false
+  return holder
 }
 
-/** Held by *someone else*, live — the condition the coloured outline renders on. */
-export function isLockedByOther(
+export function canDrag(
   shape: Pick<Shape, 'draggedBy'>,
   myUid: string | null,
   liveUids?: ReadonlySet<string>,
 ): boolean {
-  return !canDrag(shape, myUid, liveUids)
+  return lockHolder(shape, myUid, liveUids) === null
 }

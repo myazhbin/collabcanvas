@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { onValue, ref } from 'firebase/database'
-import { connectionStore, rtdb } from '../services/firebase'
+import { rtdb } from '../services/firebase'
 import { SESSIONS_PATH, startPresence } from '../services/presenceService'
 import { useAuth } from './useAuth'
+import { useConnection } from './useConnection'
 import { generateUserColor } from '../utils/helpers'
 import { dedupeByUid, isStale, type PresenceNode } from '../utils/presenceUtils'
 import { PRESENCE } from '../utils/constants'
@@ -14,7 +15,6 @@ export type PresenceView = {
   online: PresenceNode[]
   /** Every live session node, keyed by sessionId — PR 6 renders one cursor per key. */
   sessions: Record<string, SessionNode>
-  connected: boolean
 }
 
 /**
@@ -30,10 +30,9 @@ export type PresenceView = {
 export function usePresence(): PresenceView {
   const { user, displayName } = useAuth()
   const [sessions, setSessions] = useState<Record<string, SessionNode>>({})
-  const { connected, offset } = useSyncExternalStore(
-    connectionStore.subscribe,
-    connectionStore.getSnapshot,
-  )
+  // For the staleness filter's clock-skew correction only — the connection *badge* reads
+  // the same store directly, in the navbar.
+  const { offset } = useConnection()
 
   // Re-evaluates staleness on a timer. A peer that dies sends nothing, so nothing
   // triggers a listener callback, so without this their entry sits in the list forever
@@ -92,5 +91,5 @@ export function usePresence(): PresenceView {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `sweep` is the ticker
   }, [sessions, offset, sweep])
 
-  return { online, sessions, connected }
+  return { online, sessions }
 }

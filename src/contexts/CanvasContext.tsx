@@ -22,8 +22,6 @@ export type CanvasContextValue = {
   /** Drop a rectangle centred on a world point. No-op outside the world bounds. */
   placeAt: (world: Point) => void
   deleteShape: (id: string) => void
-  /** ids this tab is dragging — echo-suppressed until the commit resolves [R6]. */
-  dragging: ReadonlySet<string>
   beginDrag: (id: string) => void
   moveDrag: (id: string, x: number, y: number) => void
   endDrag: (id: string, x: number, y: number) => void
@@ -50,6 +48,9 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const [shapes, setShapes] = useState<Shape[]>([])
   const [tool, setTool] = useState<Tool>('select')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+
+  /** ids this tab is dragging — echo-suppressed until the commit resolves [R6]. Internal:
+   *  the suppression is between this provider and `shapeDiff`, and no view reads it. */
   const [dragging, setDragging] = useState<ReadonlySet<string>>(() => new Set())
 
   const uid = user?.uid
@@ -262,12 +263,11 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       select,
       placeAt,
       deleteShape,
-      dragging,
       beginDrag,
       moveDrag,
       endDrag,
     }),
-    [shapes, tool, selectedId, select, placeAt, deleteShape, dragging, beginDrag, moveDrag, endDrag],
+    [shapes, tool, selectedId, select, placeAt, deleteShape, beginDrag, moveDrag, endDrag],
   )
 
   return <CanvasContext.Provider value={value}>{children}</CanvasContext.Provider>

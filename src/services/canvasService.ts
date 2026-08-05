@@ -1,12 +1,5 @@
 import { mutateShapes, type TxResult } from './transactionService'
-import {
-  addShape,
-  claimLock,
-  commitPosition,
-  releaseAllLocks,
-  releaseLock,
-  removeShape,
-} from '../utils/shapeOps'
+import { addShape, claimLock, commitPosition, releaseAllLocks, removeShape } from '../utils/shapeOps'
 import type { Shape } from '../utils/types'
 
 /**
@@ -62,10 +55,6 @@ export async function claimShapeLock(id: string, uid: string): Promise<boolean> 
   // Not `result.applied`: re-claiming a lock you already hold applies nothing and is still
   // a success. Read the committed state instead of inferring from whether a write happened.
   return result.shapes.find((s) => s.id === id)?.draggedBy === uid
-}
-
-export function releaseShapeLock(id: string, uid: string): Promise<TxResult> {
-  return mutateShapes('release-lock', (shapes) => releaseLock(shapes, id, uid))
 }
 
 /**

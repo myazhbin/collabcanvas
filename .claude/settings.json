@@ -5,5 +5,29 @@
       "Bash(npm -v)",
       "Bash(bun --version)"
     ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"/Users/zed/Desktop/collabcanvas/.claude/sounds/play.sh\""
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"/Users/zed/Desktop/collabcanvas/.claude/sounds/play-approval.sh\""
+          }
+        ]
+      }
+    ]
   }
 }

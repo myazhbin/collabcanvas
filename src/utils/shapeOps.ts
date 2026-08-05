@@ -1,6 +1,5 @@
-// Explicit extensions: unlike its neighbours this module is imported by the emulator
-// tests too, so it compiles under tsconfig.node.json as well — and that project is
-// nodenext, where extensionless relative imports are an error.
+// Explicit extensions: reached from the emulator tests, and that project is nodenext,
+// where an extensionless relative import is an error.
 import { canDrag } from './shapeLocks.ts'
 import type { Shape } from './types.ts'
 
@@ -52,18 +51,22 @@ export function removeShape(shapes: Shape[], id: string): Shape[] {
 }
 
 /**
- * Take the soft lock, but only if it is free or already yours [R10].
+ * Take the soft lock, but only if it is free [R10].
  *
  * Refusing to steal is the whole point: two users grabbing one rectangle must produce a
- * clean lockout, not the continuous oscillation that plain last-write-wins gives you. The
- * "already yours" branch matters just as much — re-claiming your own lock has to succeed,
- * or a retry mid-drag locks you out of the shape you are holding.
+ * clean lockout, not the continuous oscillation that plain last-write-wins gives you.
  */
 export function claimLock(shapes: Shape[], id: string, uid: string): Shape[] {
   const shape = shapes.find((s) => s.id === id)
   if (!shape) return shapes
-  if (shape.draggedBy !== null && shape.draggedBy !== uid) return shapes
+
+  // Already yours: nothing to write, and that has to count as *success*. A retry mid-drag
+  // must not lock you out of the shape you are holding — which is why `claimShapeLock`
+  // reads the committed state back rather than inferring from whether a write happened.
   if (shape.draggedBy === uid) return shapes
+
+  // Held by someone else, or a legacy `undefined` this op declines to speak for.
+  if (shape.draggedBy !== null) return shapes
 
   return patchShape(shapes, id, { draggedBy: uid })
 }

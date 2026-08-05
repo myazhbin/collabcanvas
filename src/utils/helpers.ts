@@ -19,3 +19,12 @@ export function generateUserColor(uid: string): string {
   // negative index would hand back `undefined` — an invalid fill Konva renders as black.
   return PALETTE[((hash % PALETTE.length) + PALETTE.length) % PALETTE.length]
 }
+
+/**
+ * The colour to paint a peer in: the one written on their session node, falling back to
+ * the local derivation. The two agree by construction — this covers the node caught
+ * mid-write, where an empty fill would otherwise render black.
+ */
+export function userColour(uid: string, written?: string): string {
+  return written || generateUserColor(uid)
+}

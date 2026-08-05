@@ -81,7 +81,6 @@ describe('throttle', () => {
 
     send('lead')
     send('pending')
-    expect(send.isPending()).toBe(true)
 
     // Unmount, or the tab being hidden. Either way a write must not land afterwards —
     // on hide it would resurrect the cursor the visibilitychange handler just cleared.
@@ -89,17 +88,18 @@ describe('throttle', () => {
     vi.advanceTimersByTime(500)
 
     expect(fn).toHaveBeenCalledTimes(1)
-    expect(send.isPending()).toBe(false)
+    expect(fn).toHaveBeenLastCalledWith('lead')
   })
 
   it('arms nothing when no call was suppressed', () => {
     const fn = vi.fn()
     const send = throttle(fn, 50)
 
+    // One call, nothing held back — so the window must close without a trailing flush
+    // restating a position that has not moved [R14].
     send('only')
-    expect(send.isPending()).toBe(false)
-
     vi.advanceTimersByTime(500)
+
     expect(fn).toHaveBeenCalledTimes(1)
   })
 

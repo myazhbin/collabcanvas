@@ -63,10 +63,11 @@ describe('referential identity — the R7 mitigation', () => {
   })
 
   it('returns the previous array itself when nothing at all changed', () => {
+    // The array's own identity is the "nothing moved" signal — the caller's cheap test for
+    // whether a snapshot is worth a setState at all.
     const previous = [shape('a'), shape('b')]
-    const { shapes, changed } = shapeDiff(previous, previous.map(clone))
+    const { shapes } = shapeDiff(previous, previous.map(clone))
 
-    expect(changed).toBe(false)
     expect(shapes).toBe(previous)
   })
 })
@@ -74,18 +75,18 @@ describe('referential identity — the R7 mitigation', () => {
 describe('additions and removals, detected from the array alone', () => {
   it('detects an addition', () => {
     const previous = [shape('a')]
-    const { shapes, changed } = shapeDiff(previous, [clone(previous[0]), shape('b')])
+    const { shapes } = shapeDiff(previous, [clone(previous[0]), shape('b')])
 
-    expect(changed).toBe(true)
+    expect(shapes).not.toBe(previous)
     expect(shapes.map((s) => s.id)).toEqual(['a', 'b'])
     expect(shapes[0]).toBe(previous[0])
   })
 
   it('detects a removal', () => {
     const previous = [shape('a'), shape('b')]
-    const { shapes, changed } = shapeDiff(previous, [clone(previous[1])])
+    const { shapes } = shapeDiff(previous, [clone(previous[1])])
 
-    expect(changed).toBe(true)
+    expect(shapes).not.toBe(previous)
     expect(shapes.map((s) => s.id)).toEqual(['b'])
   })
 
@@ -93,9 +94,9 @@ describe('additions and removals, detected from the array alone', () => {
     // Same ids, same values, same length — only the positions swap. A diff keyed purely on
     // membership reports "nothing changed" and the canvas keeps the stale z-order.
     const previous = [shape('a'), shape('b')]
-    const { shapes, changed } = shapeDiff(previous, [clone(previous[1]), clone(previous[0])])
+    const { shapes } = shapeDiff(previous, [clone(previous[1]), clone(previous[0])])
 
-    expect(changed).toBe(true)
+    expect(shapes).not.toBe(previous)
     expect(shapes.map((s) => s.id)).toEqual(['b', 'a'])
     expect(shapes[0]).toBe(previous[1])
     expect(shapes[1]).toBe(previous[0])

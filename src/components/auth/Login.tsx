@@ -1,6 +1,8 @@
-import { useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import { useAuth } from '../../hooks/useAuth'
+import { useAuthSubmit } from '../../hooks/useAuthSubmit'
 import { mapAuthError } from '../../utils/authErrors'
+import { Field, FormError, SubmitButton } from './FormControls'
 import { Signup } from './Signup'
 
 /**
@@ -50,83 +52,55 @@ function EmailPasswordForm() {
   const { logIn } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
 
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault()
-    setBusy(true)
-    setError(null)
-
-    try {
-      await logIn(email.trim(), password)
-      // Success unmounts this form; leaving `busy` set avoids a double submit.
-    } catch (err) {
-      setError(mapAuthError(err))
-      setBusy(false)
-    }
-  }
+  const { onSubmit, error, busy } = useAuthSubmit(() => logIn(email.trim(), password))
 
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-3">
-      <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-neutral-600">Email</span>
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-          autoComplete="email"
-          placeholder="you@example.com"
-          className="rounded-lg border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-        />
-      </label>
+      <Field
+        label="Email"
+        type="email"
+        value={email}
+        onChange={setEmail}
+        autoComplete="email"
+        placeholder="you@example.com"
+      />
+      <Field
+        label="Password"
+        type="password"
+        value={password}
+        onChange={setPassword}
+        autoComplete="current-password"
+      />
 
-      <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-neutral-600">Password</span>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-          autoComplete="current-password"
-          className="rounded-lg border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-        />
-      </label>
+      <FormError message={error} />
 
-      {error && (
-        <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </p>
-      )}
-
-      <button
-        type="submit"
-        disabled={busy}
-        className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
-      >
-        {busy ? 'Signing in…' : 'Sign in'}
-      </button>
+      <SubmitButton busy={busy} busyLabel="Signing in…">
+        Sign in
+      </SubmitButton>
     </form>
   )
 }
 
+/**
+ * Not built on `useAuthSubmit`, and the difference is the whole reason this is its own
+ * component: `signInWithPopup` has to be reached synchronously from the click, so the call
+ * is the first statement and the state updates follow it. Anything awaited in front lands
+ * the call outside the user-gesture window and the browser blocks the popup — which
+ * presents as the app hanging, not as a blocked popup [R20].
+ */
 function GoogleButton() {
   const { signInWithGoogle } = useAuth()
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const onClick = () => {
-    // First statement, nothing awaited before it. `signInWithPopup` has to run inside
-    // the click's user-gesture window or the browser blocks the popup — and the
-    // failure looks like the app hanging, not like a blocked popup [R20].
     const pending = signInWithGoogle()
 
     setError(null)
     setBusy(true)
 
     pending.catch((err) => {
-      // `null` means the user simply closed the popup — not an error to report.
       setError(mapAuthError(err))
       setBusy(false)
     })
@@ -144,11 +118,7 @@ function GoogleButton() {
         {busy ? 'Opening Google…' : 'Continue with Google'}
       </button>
 
-      {error && (
-        <p role="alert" className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </p>
-      )}
+      <FormError message={error} className="mt-3" />
     </>
   )
 }

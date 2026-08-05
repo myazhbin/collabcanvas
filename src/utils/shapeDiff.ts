@@ -1,6 +1,6 @@
-// Explicit extension: reached from the emulator tests, so this compiles under
-// tsconfig.node.json too — and that project is nodenext.
-import type { Shape } from './types.ts'
+// Explicit extension: reached from the emulator tests, and that project is nodenext,
+// where an extensionless relative import is an error.
+import type { DragPayload, SessionNode, Shape } from './types.ts'
 
 /**
  * Reconcile an incoming Firestore snapshot against what is already on screen.
@@ -24,10 +24,9 @@ import type { Shape } from './types.ts'
  * and that shape is silently frozen for the rest of the session.
  */
 export type ShapeDiff = {
+  /** The **previous array itself** when nothing moved, so `===` is the caller's no-op test. */
   shapes: Shape[]
   dragging: ReadonlySet<string>
-  /** False when nothing moved — lets the caller skip a setState entirely. */
-  changed: boolean
 }
 
 export function shapeDiff(
@@ -81,7 +80,7 @@ export function shapeDiff(
     nextDragging = new Set([...dragging].filter((id) => survivors.has(id)))
   }
 
-  return { shapes: changed ? next : previous, dragging: nextDragging, changed }
+  return { shapes: changed ? next : previous, dragging: nextDragging }
 }
 
 /**
@@ -94,10 +93,13 @@ export function shapeDiff(
  * makes your own drag lag your hand.
  */
 export function collectRemoteDrags(
-  sessions: Record<string, { drag?: { id: string; x: number; y: number } | null } | null>,
+  // Only `drag` is read, and a node may legally be missing entirely — the wire is a trust
+  // boundary here exactly as it is in the presence list.
+  sessions: Record<string, Partial<Pick<SessionNode, 'drag'>> | null>,
   mySessionId: string,
-): Map<string, { x: number; y: number }> {
-  const drags = new Map<string, { x: number; y: number }>()
+  // Keyed by shape id, so the id drops out of the value.
+): Map<string, Omit<DragPayload, 'id'>> {
+  const drags = new Map<string, Omit<DragPayload, 'id'>>()
 
   for (const [key, node] of Object.entries(sessions)) {
     if (key === mySessionId) continue

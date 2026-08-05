@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canDrag, isLockedByOther } from './shapeLocks'
+import { canDrag, lockHolder } from './shapeLocks'
 
 /** Tier 2 · PR 8 — R10. Three lines of logic, one of which is a real bug when written
  *  as a truthiness check. */
@@ -54,16 +54,20 @@ describe('stale locks — why a crash cannot freeze a shape forever [R10]', () =
   })
 })
 
-describe('isLockedByOther — what the outline renders on', () => {
-  it('is the exact inverse of canDrag', () => {
+describe('lockHolder — who the outline is coloured for', () => {
+  it('names a holder exactly when canDrag refuses', () => {
     for (const draggedBy of [null, 'alice', 'bob']) {
       for (const uid of ['alice', null]) {
-        expect(isLockedByOther({ draggedBy }, uid)).toBe(!canDrag({ draggedBy }, uid))
+        expect(lockHolder({ draggedBy }, uid) !== null).toBe(!canDrag({ draggedBy }, uid))
       }
     }
   })
 
-  it('never marks your own lock as someone else’s', () => {
-    expect(isLockedByOther({ draggedBy: 'alice' }, 'alice')).toBe(false)
+  it('never reports your own lock as someone else’s', () => {
+    expect(lockHolder({ draggedBy: 'alice' }, 'alice')).toBe(null)
+  })
+
+  it('hands back the uid to colour the outline with', () => {
+    expect(lockHolder({ draggedBy: 'bob' }, 'alice', new Set(['bob']))).toBe('bob')
   })
 })

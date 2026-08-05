@@ -24,7 +24,7 @@ export function screenToWorld(p: Point, vp: Viewport): Point {
   return { x: (p.x - vp.x) / vp.scale, y: (p.y - vp.y) / vp.scale }
 }
 
-export function clampScale(scale: number): number {
+function clampScale(scale: number): number {
   return Math.min(Math.max(scale, ZOOM.min), ZOOM.max)
 }
 

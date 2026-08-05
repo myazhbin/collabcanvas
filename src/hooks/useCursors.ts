@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { connectionStore } from '../services/firebase'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { startCursorChannel, type CursorChannel } from '../services/cursorService'
 import { useAuth } from './useAuth'
-import { generateUserColor } from '../utils/helpers'
+import { useConnection } from './useConnection'
+import { userColour } from '../utils/helpers'
 import { sessionId } from '../utils/session'
 import type { Point } from '../utils/coords'
 import type { SessionNode } from '../utils/types'
@@ -45,10 +45,7 @@ export function useCursors(sessions: Record<string, SessionNode>): CursorsView {
   const { user } = useAuth()
   const uid = user?.uid
   const channel = useRef<CursorChannel | null>(null)
-  const { offset } = useSyncExternalStore(
-    connectionStore.subscribe,
-    connectionStore.getSnapshot,
-  )
+  const { offset } = useConnection()
 
   // Keyed on the uid, never `[]` [R4]. The channel writes to the session node, and a
   // publisher started before auth resolves writes into a path the rules deny.
@@ -89,9 +86,7 @@ export function useCursors(sessions: Record<string, SessionNode>): CursorsView {
             sessionId: key,
             uid: node.uid,
             name: node.name || 'Anonymous',
-            // Written colour first, local derivation as the fallback — the two agree by
-            // construction, and a node caught mid-write can be missing the field.
-            colour: node.colour || generateUserColor(node.uid),
+            colour: userColour(node.uid, node.colour),
             world: { x: cursor.x, y: cursor.y },
           },
         ]

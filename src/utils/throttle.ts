@@ -17,8 +17,6 @@ export type Throttled<A extends unknown[]> = ((...args: A) => void) & {
   /** Drop the pending trailing call. Teardown must call this, or a write lands after the
    *  thing that owned it is gone — after unmount, or after the tab was hidden. */
   cancel: () => void
-  /** Whether a trailing call is currently armed. */
-  isPending: () => boolean
 }
 
 export function throttle<A extends unknown[]>(
@@ -72,6 +70,5 @@ export function throttle<A extends unknown[]>(
       clearTimer()
       pending = null
     },
-    isPending: () => timer !== null,
   })
 }

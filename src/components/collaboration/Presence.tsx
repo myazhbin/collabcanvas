@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { useAuth } from '../../hooks/useAuth'
-import { generateUserColor } from '../../utils/helpers'
+import { userColour } from '../../utils/helpers'
+import { Avatar, AVATAR_CLASS } from './Avatar'
 import type { PresenceNode } from '../../utils/presenceUtils'
 
 const MAX_SHOWN = 5
@@ -31,35 +32,24 @@ export function Presence({ online }: { online: PresenceNode[] }) {
         {shown.map((node) => {
           const isYou = node.uid === user?.uid
           return (
-            <span
+            <Avatar
               key={node.uid}
+              name={node.name}
+              colour={userColour(node.uid, node.colour)}
+              ring={isYou ? 'dark' : 'white'}
               title={isYou ? `${node.name} (you)` : node.name}
-              // The written colour, with the local derivation as a fallback — a node
-              // read back mid-write can be missing it, and an empty fill renders black.
-              style={{ backgroundColor: node.colour || generateUserColor(node.uid) }}
-              className={`flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-semibold text-white ring-2 ${
-                isYou ? 'ring-neutral-900' : 'ring-white'
-              }`}
-            >
-              {initial(node.name)}
-            </span>
+            />
           )
         })}
 
         {overflow > 0 && (
-          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-300 text-[10px] font-semibold text-neutral-700 ring-2 ring-white">
+          <span className={`${AVATAR_CLASS} bg-neutral-300 text-neutral-700 ring-2 ring-white`}>
             +{overflow}
           </span>
         )}
       </div>
 
-      <span className="text-xs text-neutral-500">
-        {ordered.length} online
-      </span>
+      <span className="text-xs text-neutral-500">{ordered.length} online</span>
     </div>
   )
-}
-
-function initial(name: string): string {
-  return name?.trim()?.[0]?.toUpperCase() ?? '?'
 }

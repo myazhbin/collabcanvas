@@ -1,6 +1,7 @@
-import { useState, useSyncExternalStore } from 'react'
-import { connectionStore } from '../../services/firebase'
+import { useState } from 'react'
 import { useAuth } from '../../hooks/useAuth'
+import { useConnection } from '../../hooks/useConnection'
+import { Avatar } from '../collaboration/Avatar'
 import { Presence } from '../collaboration/Presence'
 import { generateUserColor } from '../../utils/helpers'
 import type { PresenceNode } from '../../utils/presenceUtils'
@@ -13,10 +14,7 @@ import { sessionId } from '../../utils/session'
  */
 export function Navbar({ online }: { online: PresenceNode[] }) {
   const { displayName, user, logOut } = useAuth()
-  const { connected, offset } = useSyncExternalStore(
-    connectionStore.subscribe,
-    connectionStore.getSnapshot,
-  )
+  const { connected, offset } = useConnection()
   const [busy, setBusy] = useState(false)
 
   const onSignOut = async () => {
@@ -56,12 +54,7 @@ export function Navbar({ online }: { online: PresenceNode[] }) {
           className="flex items-center gap-2"
           title={`${user?.email ?? ''}\nsession ${sessionId.slice(0, 8)}`}
         >
-          <span
-            style={{ backgroundColor: user ? generateUserColor(user.uid) : undefined }}
-            className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-200 text-[10px] font-semibold text-white"
-          >
-            {displayName.slice(0, 1).toUpperCase()}
-          </span>
+          <Avatar name={displayName} colour={user ? generateUserColor(user.uid) : undefined} />
           <span className="text-sm text-neutral-700">{displayName}</span>
         </span>
 

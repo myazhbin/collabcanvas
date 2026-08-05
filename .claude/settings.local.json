@@ -97,7 +97,13 @@
       "Bash(sed -n '/\\\\*\\\\*R2 —/,/\\\\*\\\\*R3 —/p' PRD.md)",
       "Bash(sed -n '/\\\\*\\\\*R17 —/,/\\\\*\\\\*R18 —/p' PRD.md)",
       "Bash(bunx firebase *)",
-      "mcp__claude-in-chrome__list_connected_browsers"
+      "mcp__claude-in-chrome__list_connected_browsers",
+      "Bash(git --no-pager diff -- src/utils src/hooks src/contexts src/services/canvasService.ts)",
+      "Bash(npm run *)",
+      "Bash(git --no-pager diff -- src/components/collaboration/Presence.tsx src/components/layout/Navbar.tsx)",
+      "Bash(npx tsc *)",
+      "Bash(npx oxlint *)",
+      "Bash(npx vitest *)"
     ]
   }
 }

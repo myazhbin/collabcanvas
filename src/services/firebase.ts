@@ -32,7 +32,7 @@ if (!firebaseConfig.databaseURL) {
   )
 }
 
-export const app = initializeApp(firebaseConfig)
+const app = initializeApp(firebaseConfig)
 
 /**
  * **Auth is scoped to the tab, not the origin.** This overrides PR 3's "never touch
