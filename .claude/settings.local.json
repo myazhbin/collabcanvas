@@ -108,7 +108,12 @@
       "Bash(cp src/utils/shapeOps.ts /tmp/shapeOps.bak)",
       "Bash(sed -i '' 's|  return Math.floor\\(existing / count\\) % BLOCK_SLOTS.length|  return 0 // MUTATION: reintroduce the stacking bug|' src/utils/shapeOps.ts)",
       "Bash(lsof -ti:5173)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/)"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/)",
+      "Bash(gh issue *)",
+      "Bash(curl -sL \"https://api.github.com/repos/konvajs/react-konva/issues/256\")",
+      "Bash(python3 -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\('TITLE:',d.get\\('title'\\)\\);print\\('STATE:',d.get\\('state'\\)\\);print\\('---BODY---'\\);print\\(\\(d.get\\('body'\\) or ''\\)[:2500]\\)\")",
+      "Bash(curl -sL \"https://api.github.com/repos/konvajs/react-konva/issues/256/comments\")",
+      "Bash(grep -n \"\\\\[uid, flushPendingClear\\\\]\\\\|\\\\[uid\\\\],$\" src/contexts/CanvasContext.tsx)"
     ]
   }
 }

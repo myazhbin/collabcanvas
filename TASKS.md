@@ -1197,15 +1197,85 @@ the measurement above is what says so.
 two-client concurrent-commit and same-shape lockout cases, so the retry and the queue did
 not weaken R23 or R10. `tsc -b && vite build` and `oxlint` clean.
 
-**Not yet verified, and it should be before PR 11:** the failing scenario re-run live —
-~50 rapid drags on a full canvas with two accounts, watching for
-`canvas transaction … failed` in the console. The first fix in this section also looked
-right and was half the story; this one deserves the same suspicion.
+**Verified live by the project owner:** the failing scenario re-run by hand — rapid drags on
+a seeded canvas with two accounts — produced **zero** `canvas transaction … failed`, against
+**64** in the recording that opened this section. The Firebase SDK's own
+`RPC 'Commit' … failed-precondition` lines still appear and are the retry working, not a
+lost write; the app-level message is the one that means anything was dropped.
 
 **The honest limit.** This makes contention survivable, not free. Two users dragging hard
 against a 1,000-shape document still queue behind one another, because one document is one
 write lane. Removing that means a document per shape, which is a different architecture from
 PRD Decision 8 and far outside a bug fix.
+
+### Two more, both surfaced by the same round of testing
+
+**1 — The event delegation had to be reverted, and react-konva was right about why.**
+Putting `mousedown` and the three drag events on the Layer produced, on every rectangle:
+
+> `ReactKonva: You have a Konva node with draggable = true and position defined but no
+> onDragMove or onDragEnd events are handled.`
+
+Delegating to a parent does **not** satisfy that check — react-konva inspects the node's own
+props — and there is no way to suppress it (konvajs/react-konva#256; the last comment on
+that issue is this exact arrangement, unanswered). More to the point, the warning's author
+gives the reason: *"it can be dragged by a user, so its position will be changed. But that
+information will not be saved back to component state."* That is not a lint nit — it is the
+precise failure this file has now had to fix twice, where Konva moves a node, React never
+hears, and the client silently diverges from everyone else.
+
+**The performance argument survives intact**, because the handlers never needed to close
+over the shape in the first place: they find it through `e.target.id()`. So all 500
+rectangles are handed the *same four function objects*, memoised in `ShapesLayer`. The
+listener sits where the library expects it, and a render still allocates zero closures per
+shape. `useCallback` is load-bearing here rather than decorative — a fresh handler per
+render would change the props of all 500 memoised rectangles and re-render every one.
+
+**2 — Remote rectangles flickered: new position → old → new.**
+Reported as *"as user 2 I see the rectangle move to its new position, quickly move back to
+its original position, and then move to the new position again."*
+
+PR 8 ordered drag-end as **commit, then clear the in-flight value**, precisely so remote
+clients never lose the in-flight position before the committed one arrives. That orders the
+two *sends*. It cannot order the two *arrivals* — and they travel on channels with very
+different latencies: RTDB is a long-lived socket delivering in tens of milliseconds, while a
+Firestore commit fans out to listeners in hundreds. So the observer reliably got the clear
+first, fell back to the **stale** committed value it had held all along, and then jumped
+again when the snapshot finally landed. The gap is the difference between the two channels,
+which is exactly the couple of hundred milliseconds that reads as a flicker.
+
+**Addressed at drag end by clearing on the echo rather than on the ack.** The dragging
+client now holds the final position on its session node until *its own* snapshot echo shows
+the commit has landed, because that echo and the observer's are the same fan-out — once we
+have seen it, they have too, near enough. Read from the raw `incoming` array rather than the
+diffed result, which is echo-suppressed for that very id and would therefore never show it
+[R6]. Backstops, because a clear that never happens pins the rectangle at a stale position
+for everyone and is much worse than a flicker: a 2 s timer for the case where no snapshot is
+coming at all (a commit that changed nothing fires none), an `expires` check on the echo
+path, an immediate clear when the commit failed, and a cancel when a new drag takes the
+field over — clearing then would wipe the *new* value rather than the finished one.
+
+**But instrumenting it found a second, larger cause — and one that may not be a product bug
+at all.** Recording the *publisher's* outgoing RTDB writes during a drag showed `drag: null`
+going out **between every pair of positions**, roughly 40 ms after each one, and sometimes
+`cursor: null` alongside it. Both channels clearing together points at one thing, and the
+event log confirmed it: **six `visible`/`hidden` transitions inside twelve seconds, with
+zero `blur` or `focus` events.** Each `hidden` fires `clear()` on both channels by design
+[R16], the observer loses the in-flight position, and the rectangle snaps back to the
+committed value until the next sample.
+
+`HIDE_GRACE_MS` (400 ms) now debounces both the channel clear and `CanvasProvider`'s lock
+release. That is a real improvement on its own terms — R16 is about a tab left in the
+background, not a sub-second blip, and a blip should not abandon a gesture in progress — but
+it did **not** remove the flicker here, and the reason matters: in the automated browser
+pane the dragging tab is **genuinely hidden almost all the time**, surfacing for 26–53 ms at
+a stretch. Clearing is then the correct behaviour and no grace period should mask it.
+
+**So this one is not settled.** What is measured: the publisher clears mid-drag, the trigger
+is `visibilitychange`, and the debounce is correct but insufficient *in this harness*.
+What is **not** established: whether a real user, dragging in a genuinely visible window,
+sees any of it. The only way to tell is two **separate browser windows, side by side and
+both visible, outside the automation** — which is PR 11's setting anyway.
 
 ### What actually made the difference — and it was not the layer split
 
@@ -1234,11 +1304,12 @@ the shapes layer at all**:
 2. **`useStableValue`** — `sessions` is a fresh object 20 times a second per peer, so
    `liveUids` and `remoteDrags` were fresh objects too, and a memo whose props are new every
    tick is decorative. The comparison is O(peers); what it protects is O(shapes).
-3. **Event delegation** — `mousedown` and the three drag events bubble to the Layer, and
-   `id` on the node maps them back. One listener per event instead of five hundred, and
-   `Rectangle` carries no closures at all: 2,000 fewer allocations per render. This is the
-   pattern Konva's own 20,000-node demo uses, and it is why that demo can afford to hand
-   every node a handler.
+3. **One shared handler set** — the handlers find their shape through `e.target.id()`
+   instead of closing over it, so all 500 nodes are handed the *same* four function objects
+   and `Rectangle` allocates no closures at all: 2,000 fewer per render. This started out as
+   delegation to the Layer, which is the pattern Konva's own 20,000-node demo uses; it had
+   to be reverted to per-node listeners, and the finding below is why. The saving is
+   unaffected — sharing the handler was always the part that mattered, not delegating it.
 
 `Rectangle`'s props went from ten to four — `shape`, `draggable`, `remote`, `outline` —
 and three of the four are `null` or unchanged in the common case.
@@ -1298,14 +1369,14 @@ gesture whatever — 70 cursor updates landed (≈11.7 Hz), 75 Konva nodes were 
 **not one of them was a shape**.
 
 **The refactor's behaviour, driven through real DOM events against the running app** —
-because delegation and `strokeScaleEnabled` both change how the canvas *works*, not just how
-fast it is:
+because the handler arrangement and `strokeScaleEnabled` both change how the canvas *works*,
+not just how fast it is:
 
 | Check | Result |
 |---|---|
-| Press on a shape → selected, via the Layer's **one** delegated handler | `stroke: #111827`, `strokeWidth: 2`, `strokeScaleEnabled: false` |
+| Press on a shape → selected, via the **one** shared handler | `stroke: #111827`, `strokeWidth: 2`, `strokeScaleEnabled: false` |
 | Ring width in Konva units at 100% / 148% / 323% | **2 / 2 / 2** — and painted pixels held at 3 px for a 3 px stroke across 100/200/400% |
-| Drag via the delegated handlers | hit resolved to the right `Rect`, `isDragging: true`, moved **(22.3, 12.4)** world units for (72, 40) screen px at 3.23× — exact |
+| Drag via the shared handlers | hit resolved to the right `Rect`, `isDragging: true`, moved **(22.3, 12.4)** world units for (72, 40) screen px at 3.23× — exact |
 
 ### Two active users
 
