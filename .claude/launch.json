@@ -12,6 +12,12 @@
       "runtimeExecutable": "bun",
       "runtimeArgs": ["run", "preview"],
       "port": 4173
+    },
+    {
+      "name": "collabcanvas-preview-5173",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "preview", "--", "--port", "5173", "--strictPort"],
+      "port": 5173
     }
   ]
 }

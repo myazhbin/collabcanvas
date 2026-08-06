@@ -14,6 +14,27 @@ import type { CanvasDoc, Shape } from '../utils/types'
  * The `body` must be **pure**. Firestore re-runs the callback whenever the document changes
  * underneath it, so anything with a side effect in there happens an unpredictable number of
  * times. All the bodies live in `shapeOps.ts`, tested against that property directly.
+ *
+ * ### Contention is the thing this file has to survive
+ *
+ * One document means **every** write is a read-modify-write of the whole array, and two of
+ * them per drag: `claim-lock` on grab, `commit-position` on release. Firestore's optimistic
+ * concurrency then rejects any commit whose base version moved underneath it —
+ * `failed-precondition: the stored version … does not match the required base version`.
+ *
+ * Measured on a 1,456-shape canvas with **one** user dragging: 48 drags produced **32 failed
+ * commits and 32 failed lock claims**. Two thirds of the moves were silently lost, and each
+ * loss stranded the dragging client showing a position nobody else had — plus a `draggedBy`
+ * that was never released, so the rectangle stayed ringed and immovable for everyone.
+ *
+ * Two things fix that, and both are here rather than at the call sites:
+ *
+ * 1. **Writes from this client are serialised.** The contention above was almost entirely
+ *    *self*-contention — the lock claim for one drag racing the commit of the previous one.
+ *    A client cannot beat itself if only one of its transactions is ever in flight.
+ * 2. **Retry with backoff.** The SDK retries a handful of times immediately, which is no use
+ *    when the contention lasts longer than that. Backing off with jitter is what turns a
+ *    genuinely contended write into a slow one instead of a lost one.
  */
 export const canvasRef = doc(db, 'canvas', CANVAS_ID)
 
@@ -26,34 +47,93 @@ export type TxResult = {
   shapes: Shape[]
 }
 
-export async function mutateShapes(
+/**
+ * Errors worth trying again. All of them mean "someone else got there first" or "the
+ * backend is busy" — never "this write is invalid", which retrying could not help.
+ */
+const RETRYABLE = new Set([
+  'aborted',
+  'failed-precondition',
+  'unavailable',
+  'deadline-exceeded',
+  'resource-exhausted',
+  'cancelled',
+  'internal',
+])
+
+const MAX_ATTEMPTS = 5
+const BACKOFF_BASE_MS = 120
+
+/**
+ * The tail of this client's in-flight writes. Every mutation queues behind it, so exactly
+ * one transaction from this tab is ever open against the canvas document.
+ *
+ * This is not a lock and it is not a substitute for the transaction — two *clients* still
+ * contend, and Decision 8's transaction is what settles that [R23]. It only removes the
+ * contention a client creates against itself, which is the kind that is both free to avoid
+ * and, measured, most of it.
+ */
+let queue: Promise<unknown> = Promise.resolve()
+
+export function mutateShapes(
   label: string,
   body: (shapes: Shape[]) => Shape[],
 ): Promise<TxResult> {
-  try {
-    return await runTransaction(db, async (tx) => {
-      const snap = await tx.get(canvasRef)
-      const current = (snap.data() as CanvasDoc | undefined)?.shapes ?? []
-      const next = body(current)
+  const run = queue.then(
+    () => attempt(label, body),
+    () => attempt(label, body),
+  )
 
-      // `shapeOps` returns the same reference when nothing changed, which makes a no-op
-      // free to detect — and skipping the write matters: Firestore's Spark tier meters
-      // writes daily, and a refused lock claim would otherwise still cost one [R14].
-      if (next === current) return { ok: true, applied: false, shapes: current }
+  // The queue itself must never reject, or one failure would poison every later write.
+  queue = run.catch(() => undefined)
 
-      // `set` rather than `update` when the document does not exist yet — `update` on a
-      // missing document throws, and the very first shape on a fresh project would fail.
-      if (snap.exists()) tx.update(canvasRef, { shapes: next })
-      else tx.set(canvasRef, { shapes: next } satisfies CanvasDoc)
+  return run
+}
 
-      return { ok: true, applied: true, shapes: next }
-    })
-  } catch (err) {
-    // Every transaction is caught, without exception. Firestore gives up after a fixed
-    // number of retries under contention and throws — and an uncaught rejection here is
-    // indistinguishable from the write having silently done nothing, which is the most
-    // expensive way for this to fail [R23].
-    console.error(`canvas transaction "${label}" failed — the change was NOT saved`, err)
-    return { ok: false, applied: false, shapes: [] }
+async function attempt(label: string, body: (shapes: Shape[]) => Shape[]): Promise<TxResult> {
+  let lastError: unknown
+
+  for (let n = 0; n < MAX_ATTEMPTS; n++) {
+    try {
+      return await runTransaction(db, async (tx) => {
+        const snap = await tx.get(canvasRef)
+        const current = (snap.data() as CanvasDoc | undefined)?.shapes ?? []
+        const next = body(current)
+
+        // `shapeOps` returns the same reference when nothing changed, which makes a no-op
+        // free to detect — and skipping the write matters: Firestore's Spark tier meters
+        // writes daily, and a refused lock claim would otherwise still cost one [R14].
+        if (next === current) return { ok: true, applied: false, shapes: current }
+
+        // `set` rather than `update` when the document does not exist yet — `update` on a
+        // missing document throws, and the very first shape on a fresh project would fail.
+        if (snap.exists()) tx.update(canvasRef, { shapes: next })
+        else tx.set(canvasRef, { shapes: next } satisfies CanvasDoc)
+
+        return { ok: true, applied: true, shapes: next }
+      })
+    } catch (err) {
+      lastError = err
+      if (!RETRYABLE.has(codeOf(err))) break
+
+      // Exponential, with jitter. Without the jitter two clients that collide once tend to
+      // collide again on the same schedule, which is how a burst of contention becomes a
+      // standoff rather than a queue.
+      const backoff = BACKOFF_BASE_MS * 2 ** n * (0.5 + Math.random())
+      await new Promise((resolve) => setTimeout(resolve, backoff))
+    }
   }
+
+  // Every transaction is caught, without exception. An uncaught rejection here is
+  // indistinguishable from the write having silently done nothing, which is the most
+  // expensive way for this to fail [R23].
+  console.error(
+    `canvas transaction "${label}" failed after ${MAX_ATTEMPTS} attempts — the change was NOT saved`,
+    lastError,
+  )
+  return { ok: false, applied: false, shapes: [] }
+}
+
+function codeOf(err: unknown): string {
+  return typeof err === 'object' && err !== null && 'code' in err ? String(err.code) : ''
 }

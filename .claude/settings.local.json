@@ -103,7 +103,12 @@
       "Bash(git --no-pager diff -- src/components/collaboration/Presence.tsx src/components/layout/Navbar.tsx)",
       "Bash(npx tsc *)",
       "Bash(npx oxlint *)",
-      "Bash(npx vitest *)"
+      "Bash(npx vitest *)",
+      "Bash(awk '{n += gsub\\(/VITE/, \"\"\\)} END {print n}' /Users/zed/Desktop/collabcanvas/.env)",
+      "Bash(cp src/utils/shapeOps.ts /tmp/shapeOps.bak)",
+      "Bash(sed -i '' 's|  return Math.floor\\(existing / count\\) % BLOCK_SLOTS.length|  return 0 // MUTATION: reintroduce the stacking bug|' src/utils/shapeOps.ts)",
+      "Bash(lsof -ti:5173)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/)"
     ]
   }
 }

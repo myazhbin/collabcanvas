@@ -1,5 +1,11 @@
 import { mutateShapes, type TxResult } from './transactionService'
-import { addShape, claimLock, commitPosition, releaseAllLocks, removeShape } from '../utils/shapeOps'
+import {
+  addShape,
+  claimLock,
+  commitPosition,
+  releaseAllLocks,
+  removeShape,
+} from '../utils/shapeOps'
 import type { Shape } from '../utils/types'
 
 /**
@@ -64,4 +70,21 @@ export async function claimShapeLock(id: string, uid: string): Promise<boolean> 
  */
 export function releaseMyLocks(uid: string): Promise<TxResult> {
   return mutateShapes('release-all-locks', (shapes) => releaseAllLocks(shapes, uid))
+}
+
+/**
+ * Append a pre-built block of shapes in **one** transaction [R22].
+ *
+ * The single write is the whole point. Five hundred calls to `createShape` would serialize
+ * behind each other against one document, take minutes, and spend 500 of the 20,000 daily
+ * Spark writes [R14]. Appending rather than replacing, so seeding never silently discards
+ * whatever anyone else has drawn.
+ */
+export function seedShapes(seed: Shape[]): Promise<TxResult> {
+  return mutateShapes('seed', (shapes) => (seed.length === 0 ? shapes : [...shapes, ...seed]))
+}
+
+/** Empty the canvas — also one write, and a no-op on an already-empty document. */
+export function clearShapes(): Promise<TxResult> {
+  return mutateShapes('clear-all', (shapes) => (shapes.length === 0 ? shapes : []))
 }

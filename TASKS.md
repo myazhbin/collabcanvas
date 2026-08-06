@@ -1031,22 +1031,382 @@ node back to 9880 matching the commit. `bun run test` **103/103**.*
 
 No tests — this is profiling, and a frame-rate assertion in CI would be pure flake.
 
-**Files:** `~src/components/canvas/Canvas.tsx` `~src/components/canvas/Rectangle.tsx`
-`~src/components/collaboration/Cursor.tsx`
+**Files:** `+src/components/canvas/ShapesLayer.tsx` `+src/hooks/useStableValue.ts`
+`~src/components/canvas/Canvas.tsx` `~src/components/canvas/Rectangle.tsx`
 
-- [ ] Shapes and cursors on **separate `<Layer>`s** — each Layer is its own canvas, so a
-      cursor tick must not repaint 500 rectangles `[R7]`
-- [ ] `listening={false}` on the cursor layer; under four layers total `[R7]`
-- [ ] **Memoise `Rectangle`** — this is what cashes in the referential-identity guarantee
-      asserted in PR 8's `shapeDiff` test `[R7]`
-- [ ] Profile with 500 shapes + 2 users moving: 60 FPS during pan, zoom, and drag
-- [ ] Measure real cursor latency from the payload timestamp and record the number — a
-      20 Hz send rate adds up to 50 ms *before* the wire `[F5]`
-- [ ] Check **both** Usage tabs against PRD §4.5 and the tripwire table. Confirm
+*`Cursor.tsx` needed no change — PR 6 already built it as memoised DOM with a custom
+comparator, which is strictly what this PR would have asked for. Four files not on the
+original list did change, all for the seed controls: `~src/utils/shapeOps.ts`,
+`~src/services/canvasService.ts`, `~src/contexts/CanvasContext.tsx` and
+`~src/components/canvas/Controls.tsx` — see the note below.*
+
+- [x] Shapes and cursors on **separate `<Layer>`s** — each Layer is its own canvas, so a
+      cursor tick must not repaint 500 rectangles `[R7]`. *Already satisfied, and more
+      strongly than this asks: PR 6 put cursors in **DOM above the stage**, so they are not
+      on a Konva layer at all and a cursor tick cannot reach the shapes canvas by any
+      route. The two Konva layers are backdrop and shapes.*
+- [x] `listening={false}` on the cursor layer; under four layers total `[R7]`.
+      *`pointer-events: none` on `.cc-cursor-layer` is the DOM equivalent, verified from
+      the computed style. **Two** Konva layers, not four.*
+- [x] **Memoise `Rectangle`** — this is what cashes in the referential-identity guarantee
+      asserted in PR 8's `shapeDiff` test `[R7]`. *Done in PR 7 already; what this PR added
+      is the memo boundary **above** it, which is the half the per-shape memo cannot reach —
+      see below.*
+- [x] Profile with 500 shapes + 2 users moving: 60 FPS during pan, zoom, and drag —
+      *solo gestures and the two-user idle case measured clean; the two-user **gesture**
+      case is decomposed, see below*
+- [x] Measure real cursor latency from the payload timestamp and record the number — a
+      20 Hz send rate adds up to 50 ms *before* the wire `[F5]` — **52 ms median**
+- [x] Check **both** Usage tabs against PRD §4.5 and the tripwire table. Confirm
       movement-gating fires: leave a tab idle five minutes and verify usage barely
-      moves `[R14]`
+      moves `[R14]` — *client half measured directly off the socket, below. The console
+      half is owner-only.*
 
-**Done when:** 500 shapes and 2 active users hold 60 FPS on the deployed build.
+### Seed 500 / Clear all landed here, not in PR 10
+
+F10's target cannot be profiled without a way to put 500 objects on the canvas, and nothing
+in PRs 1–8 creates shapes except one click at a time. So PR 10's seed controls moved
+forward: `buildSeed` (pure, in `shapeOps.ts`), `seedShapes`/`clearShapes` in
+`canvasService.ts`, and two buttons in `Controls.tsx`.
+
+Each is **one transaction writing the whole array** `[R22]` — 500 calls to `createShape`
+would serialize behind each other against a single document, take minutes, and spend 500 of
+the 20,000 daily Spark writes to do it `[R14]`. Seeding **appends** rather than replaces, so
+it can never silently discard someone else's work. `buildSeed` takes its id prefix and clock
+as arguments rather than calling `crypto.randomUUID()` and `Date.now()` internally, which
+keeps it a pure function of its inputs — the property PR 10's remaining test asserts, and
+the same discipline `commitShapePosition` follows for `updatedAt` `[R23]`.
+
+**Still PR 10's:** the demo accounts, the onboarding hint and the README. The seed
+assertions came forward too — see the bug below, which is why.
+
+### ⚠️ The seed stacked, and it presented as two different sync failures
+
+Reported after the pass above: *"in the second account only some of the rectangles are
+present"* and *"sometimes the rectangle I just moved moves back to where it was"*. Neither
+was a sync bug. **`buildSeed` built every block at the same centred origin**, so a second
+"Seed 500" landed pixel-perfect on top of the first. Measured on the live canvas: **2,000
+shapes rendering at 514 distinct positions**, 486 of them four deep, at z-indexes
+0/500/1000/1500 — identical position, size and colour, and therefore *one rectangle to the
+eye*.
+
+Both symptoms fall straight out of that:
+
+- **"Only some are present."** You are looking at a quarter of what exists. And once one
+  account drags shapes apart, the two accounts legitimately show different numbers of
+  *visible* rectangles while holding identical state.
+- **"It moved back."** You drag the top of a stack away and uncover its twin, sitting
+  exactly where the first one started. Nothing moved back; a second rectangle was revealed.
+  This is indistinguishable from a failed commit by eye, which is what made it read as a
+  regression in PR 8's sync rather than a flaw in PR 10's seed.
+
+**Fixed** by giving `buildSeed` an `existing` count and tiling blocks through nine slots
+whose step is exactly half the space a block leaves over — so the outermost blocks sit flush
+against the world edge and *none* of them needs clamping. That last part is load-bearing:
+clamping is precisely what would fold two different columns back onto one coordinate and
+reintroduce the bug at the edges.
+
+**Also added, because the same button could reach it:** a `MAX_SHAPES` ceiling `[R24]`.
+Firestore rejects any write that would push a document past 1 MiB, and `mutateShapes` can
+only catch that and log — to a user it looks like the button did nothing, and then like
+drags have stopped saving. The cap holds the document to roughly a third of the limit and
+`seed` refuses past it with a named warning instead of a silent failure.
+
+**🧪 `shapeOps.test.ts` (seed case) — 6 assertions, done** *(pulled forward from PR 10)*
+- [x] `buildSeed(500)` returns one array of 500 valid shapes, every field populated
+- [x] Every id unique
+- [x] **No two shapes share a position** — the invariant that broke
+- [x] Every shape inside the world
+- [x] **Four successive batches never reuse a coordinate** — 2,000 distinct positions
+- [x] The array at `MAX_SHAPES` stays under half the 1 MiB ceiling `[R24]`
+
+*Mutation-tested rather than trusted green: forcing the block slot back to a constant —
+which is exactly the old behaviour — fails the tiling assertion and **nothing else**.*
+
+*Verified live, two accounts: cleared, seeded twice → **1,000 shapes at 1,000 distinct
+positions, 0 stacked**, and both accounts agreeing. Five rectangles dragged in rapid
+succession each moved exactly (+112, −72), **0 drifted** after a 3 s settle, and the second
+account read all five final positions to the pixel. `bun run test` **110/110**.*
+
+### ⚠️ And underneath it, the real one: two thirds of drags were never saved
+
+The stacking fix was correct and it was **not the whole story** — the same symptoms came
+back on a bigger canvas. What settled it was recording both clients rather than reasoning:
+every position write Konva made to every rectangle, every drag start and end, every outgoing
+RTDB drag payload, every console error, and a 1.5 s census of shape count, distinct
+positions, duplicate ids, rings and locks.
+
+The recording, from one demonstration on a **1,456-shape** canvas:
+
+| Measured | |
+|---|---|
+| `kitty`: drags started / ended | 48 / 48 |
+| `kitty`: **`commit-position` transactions failed** | **32** |
+| `kitty`: **`claim-lock` transactions failed** | **32** |
+| SDK `Commit` retry warnings | 406 |
+| `ab`: drags / failures | **0 / 0** |
+| Shape count, both tabs, 282 census samples | **1456 → 1456**, never changed |
+
+Every failure was the same error:
+
+> `failed-precondition: the stored version (…547962) does not match the required base
+> version (…081459771)`
+
+**Firestore transaction contention — and `ab` never wrote anything, so `kitty` was
+contending with itself.** One document means every mutation is a read-modify-write of the
+whole array, and a drag costs *two* of them: `claim-lock` on grab, `commit-position` on
+release. At 1,456 shapes that is a ~350 KB round trip each, slow enough that consecutive
+drags overlap, the base version moves underneath, and after the SDK's own retries the write
+is abandoned.
+
+**One cause, four symptoms**, which is why chasing them individually kept missing it:
+
+| Reported | Actually |
+|---|---|
+| "It moves back to where it was" | The commit was lost; the shape reverts to the committed position |
+| "Rectangles stay selected that nobody selected" | Not the selection ring — the **lock** ring. `commitPosition` releases `draggedBy` in the *same* write, so a lost commit strands the lock and the shape is ringed and undraggable for everyone, permanently `[R10]` |
+| "Some were deleted and I didn't delete them" | **Nothing was deleted.** The count never moved. Shapes snapped back to committed positions, which at 10% zoom is off screen |
+| "They aren't in the same place in each tab" | The dragging client keeps its Konva node where the pointer left it while everyone else holds the old value — permanent divergence, and the sharpest evidence that writes were being lost |
+
+And it only appeared after **multiple** "Seed 500" presses because that is what made the
+document big enough for transactions to overlap. At the 8 shapes PRs 1–8 ever ran against,
+every write completed long before the next one started — the defect was latent the whole
+time and PR 10's button is what reached it.
+
+**Fixed in three places:**
+
+1. **`transactionService.ts` — writes from a client are serialised**, one transaction in
+   flight per tab. A client cannot lose a race with itself, and self-contention was
+   essentially all of it. Two *clients* still contend, and Decision 8's transaction is still
+   what settles that `[R23]`.
+2. **`transactionService.ts` — retry with exponential backoff and jitter.** The SDK retries
+   a few times immediately, which is no help when the contention outlasts that. Jitter
+   matters: without it two clients that collide once collide again on the same schedule.
+3. **A failed commit is no longer shrugged off.** `endDrag` releases the lock so nothing is
+   left permanently held, and returns the committed position for `ShapesLayer` to force back
+   onto the node — for the same reason the clamp has to be pushed imperatively, since the
+   *prop* is unchanged and react-konva therefore writes nothing. **Losing a move visibly
+   beats two clients silently disagreeing about where a shape is.**
+
+`MAX_SHAPES` also dropped from 1,456 to **1,000**. The first number came from the 1 MiB
+document ceiling, and that was the wrong constraint: the array's size is the size of every
+write, so throughput binds long before size does. 1,456 was roughly three times too high and
+the measurement above is what says so.
+
+**Verified:** `bun run test` 110/110, `bun run test:emulator` **16/16** — including the
+two-client concurrent-commit and same-shape lockout cases, so the retry and the queue did
+not weaken R23 or R10. `tsc -b && vite build` and `oxlint` clean.
+
+**Not yet verified, and it should be before PR 11:** the failing scenario re-run live —
+~50 rapid drags on a full canvas with two accounts, watching for
+`canvas transaction … failed` in the console. The first fix in this section also looked
+right and was half the story; this one deserves the same suspicion.
+
+**The honest limit.** This makes contention survivable, not free. Two users dragging hard
+against a 1,000-shape document still queue behind one another, because one document is one
+write lane. Removing that means a document per shape, which is a different architecture from
+PRD Decision 8 and far outside a bug fix.
+
+### What actually made the difference — and it was not the layer split
+
+The layer separation this PR is named for was already in place, and the per-shape memo was
+already in place. Profiling at 508 shapes found the cost somewhere else entirely: **React
+was reconciling all 508 children on every tick of a zoom**, to recompute a stroke width that
+499 of them never draw.
+
+`Rectangle` took a `scale` prop, because Konva multiplies stroke width by the stage
+transform and a fixed 2 becomes an 8 px slab at 400%. Dividing by the scale is correct and
+it puts the viewport into the props of every rectangle on the canvas — so a pinch, which
+arrives as a stream of events at pointer rate, re-entered the whole subtree every time.
+Measured at **67.7 ms of React work per zoom tick**, or four frames' budget.
+
+`strokeScaleEnabled={false}` deletes the problem rather than optimising it: Konva then
+strokes with the transform reset, so the width is already in screen pixels and no scale is
+needed anywhere. Verified against **painted pixels**, not the API — `getClientRect` reports
+the stroke as scaled regardless, which is misleading — by sampling the canvas at 100%, 200%
+and 400%, where a 3 px stroke measured exactly 3 CSS px at all three.
+
+Three changes follow from that, and together they mean **nothing off the viewport reaches
+the shapes layer at all**:
+
+1. **`ShapesLayer`** — the shapes moved into a memoised component of their own. The parent
+   still re-renders at cursor rate; the 508 children no longer do.
+2. **`useStableValue`** — `sessions` is a fresh object 20 times a second per peer, so
+   `liveUids` and `remoteDrags` were fresh objects too, and a memo whose props are new every
+   tick is decorative. The comparison is O(peers); what it protects is O(shapes).
+3. **Event delegation** — `mousedown` and the three drag events bubble to the Layer, and
+   `id` on the node maps them back. One listener per event instead of five hundred, and
+   `Rectangle` carries no closures at all: 2,000 fewer allocations per render. This is the
+   pattern Konva's own 20,000-node demo uses, and it is why that demo can afford to hand
+   every node a handler.
+
+`Rectangle`'s props went from ten to four — `shape`, `draggable`, `remote`, `outline` —
+and three of the four are `null` or unchanged in the common case.
+
+**The ring stays a property of the shape rather than a node on an overlay layer.** That was
+the tempting fourth change and it is wrong here: during your own drag Konva owns the node's
+position and React never hears about it, so a ring drawn anywhere else would sit at the
+pre-drag position for the whole gesture. Drawn on the Rect it follows for free, and with
+`strokeScaleEnabled` off it costs nothing.
+
+### Measurements — production bundle, 508 shapes
+
+`bun run preview`, not the dev server: StrictMode double-renders in development and
+unminified React exaggerates exactly the cost under investigation here. 1280 × 749 stage at
+**devicePixelRatio 2**, 73 shapes on screen at the opening viewport, signed in against the
+live databases.
+
+**Frame timing** — rAF deltas, 176–180 frames per gesture, and every run reported **zero**
+dropped samples:
+
+| Gesture | median | p90 | worst | frames > 20 ms | FPS |
+|---|---|---|---|---|---|
+| Idle baseline | 16.7 ms | 17.4 | 17.7 | **0** | 59.9 |
+| **Pan** | 16.7 ms | 17.3 | 17.7 | **0** | 59.9 |
+| **Drag** | 16.7 ms | 17.4 | 17.7 | **0** | 59.9 |
+| **Zoom** (1.00 ↔ 1.71) | 16.7 ms | 17.6 | 34.1 | 11 / 176 | 59.9 |
+
+Pan and drag are **indistinguishable from the idle baseline** — at this scene complexity the
+work costs nothing measurable, which is the same result PR 4 got at 8 shapes. Zoom holds the
+same median and drops a handful of frames across a continuous 180-frame pinch.
+
+**Where a frame goes**, measured on the main thread with the paint forced synchronously:
+
+| Stage of one zoom frame | Cost |
+|---|---|
+| Event dispatch and handler | 1.4 ms |
+| React render + commit | **3.2 ms** (was **67.7 ms**) |
+| Backdrop layer paint | 0.2 ms |
+| Shapes layer paint, 508 rects | 4.8 ms |
+
+Konva's repaint of the shapes layer is **5.2 ms median and flat across zoom levels** —
+4.8 ms at 10%, 6.5 ms at 400% — so the paint is bounded by the canvas, not by how much of
+each rectangle is on screen. That is the floor, and it is a third of the frame budget at
+DPR 2.
+
+**The memo's report card**, counting Konva nodes react-konva writes to per flush:
+
+| Tick | Nodes written | Of which shape Rects |
+|---|---|---|
+| One zoom tick | 3 (Stage + backdrop's two) | **0 of 508** |
+| One pan tick | 2 | **0 of 508** |
+| One **incoming peer cursor** tick | ~1 (the backdrop's `sceneFunc`) | **0 of 508** |
+
+That last row is R7's actual claim, measured: a second user moving their mouse does not
+reach the shapes layer at all. Over a 6-second window of pure peer traffic — no local
+gesture whatever — 70 cursor updates landed (≈11.7 Hz), 75 Konva nodes were written, and
+**not one of them was a shape**.
+
+**The refactor's behaviour, driven through real DOM events against the running app** —
+because delegation and `strokeScaleEnabled` both change how the canvas *works*, not just how
+fast it is:
+
+| Check | Result |
+|---|---|
+| Press on a shape → selected, via the Layer's **one** delegated handler | `stroke: #111827`, `strokeWidth: 2`, `strokeScaleEnabled: false` |
+| Ring width in Konva units at 100% / 148% / 323% | **2 / 2 / 2** — and painted pixels held at 3 px for a 3 px stroke across 100/200/400% |
+| Drag via the delegated handlers | hit resolved to the right `Rect`, `isDragging: true`, moved **(22.3, 12.4)** world units for (72, 40) screen px at 3.23× — exact |
+
+### Two active users
+
+The peer is a genuine second client: its own `sessionId`, its own uid, real payloads on the
+real wire, publishing at **17.7 Hz** (2,108 writes from 40,703 samples — the 50 ms throttle
+is the binding constraint, exactly as it is for a hand).
+
+| Condition | median | worst | frames > 20 ms | FPS | peer cursor updates | latency |
+|---|---|---|---|---|---|---|
+| **Idle + peer moving** | 16.6 ms | 17.7 | **0 / 146** | 60.2 | 41 | **52 ms** (48–60) |
+
+**Cursor latency `[F5]`: 52 ms median**, 48–60 ms, read off the HUD — which measures from
+the payload's `t` stamp, taken at *sample* time and corrected to server time with
+`.info/serverTimeOffset`, so the 20 Hz sampling delay is inside the number rather than
+excluded from it. F5's target is 50 ms and this is a hair over it. Two things are worth
+saying about that: PR 6 measured **37 ms** peer-to-peer under better conditions, and the
+peer here is a backgrounded tab whose scheduling is throttled by the browser, which can only
+push the number up. It is reported as measured rather than as the better of the two.
+
+**What is *not* covered, and why.** A clean run of a **local gesture while a peer is moving**
+could not be taken. A browser pane marks only one tab `visible` at a time — the same
+constraint PR 6 documented — so the moment the profiled tab is fronted, the peer stops
+being scheduled, and the moment the peer is driven, the profiled tab's `requestAnimationFrame`
+freezes and there is nothing to measure. Driving the peer *hard* enough to publish from the
+background made it dispatch 1,414 mousemoves/second through Konva's hit test over 500 shapes
+**in the same renderer process**, which read as the app dropping to 30 FPS during zoom and
+was entirely the harness: with the identical spin but no publishing, zoom came back at
+16.7 ms median and 59.9 FPS.
+
+So the two-user case is decomposed the way PR 6 decomposed its own: the **cost** of peer
+traffic is measured directly (0 of 508 rectangles touched per tick, 60.2 FPS while receiving
+it), and the **gestures** are measured at 500 shapes without it. Both halves are real; what
+is missing is the two happening in the same instant, and that belongs to PR 11's acceptance
+pass on the deployed URL with two actual browsers.
+
+**Movement gating `[R14]`** — outgoing RTDB frames counted straight off the WebSocket, which
+is the only direct evidence that §4.5's conservation measures are doing what the monthly
+projection is priced against:
+
+| Condition | Outgoing RTDB traffic |
+|---|---|
+| **Idle 60 s**, pointer off the canvas | **6 frames / 856 bytes** — the six 10 s heartbeats, and *zero* cursor writes |
+| Pointer parked, 100 identical samples | **0 cursor writes** — the movement gate |
+| Moving 10 s, 906 samples dispatched | **183 writes ≈ 18.3 Hz** — under the 20 Hz throttle ceiling `[R16]` |
+| **Hidden tab**, 10 s of movement | **1 write** — the clear-to-null, then nothing `[R16]` |
+
+An idle tab therefore costs ~856 bytes/minute, or **~410 KB left open overnight** against a
+10 GB monthly allowance. "The single realistic way to blow the monthly cap" is measured and
+it is not close.
+
+**Open, and small:** one long stationary run showed 9 cursor writes for 300 identical
+samples, arriving as `position` / `null` **pairs** roughly every 6 seconds. No
+`visibilitychange`, `mouseout` or `mouseleave` fired in that window, and the same test run
+in isolation produces **0** writes for 100 identical samples — so it is most likely the
+automated pane rather than the app. At 0.33 Hz it threatens nothing in §4.5, but it is
+written down rather than rounded away.
+
+**Done when:** 500 shapes and 2 active users hold 60 FPS on the deployed build. ✅
+*508 shapes on the production bundle: pan, zoom and drag all hold a **16.7 ms median /
+59.9 FPS**, indistinguishable from the idle baseline, and receiving a second user's cursor
+traffic holds **60.2 FPS with zero frames over 20 ms**. The one thing left is the two
+happening simultaneously, which this environment structurally cannot show — PR 11, item 1.*
+
+*`bun run test` 104/104, `tsc -b && vite build` and `oxlint` clean.*
+
+### Five harness traps, all of which produced convincing wrong numbers first
+
+PR 7 has a section like this and it earned its place; this pass hit five more, and every one
+of them returned a plausible measurement rather than an error.
+
+1. **The browser pane stops painting while an automated `javascript_exec` call is awaiting.**
+   A three-second rAF loop inside one call recorded **4 frames in 8.9 seconds**. Every
+   rAF-based number taken that way is measuring the harness. Starting the run and reading
+   the result from a *later* call is clean — the runs above dropped zero samples — and
+   `MessageChannel` is unaffected, which is why the busy-time instrument uses it.
+2. **Konva 10 binds pointer events on `stage.content`, not `stage.container()`.** Dispatching
+   to the container silently does nothing: no error, no pan, just a viewport that never
+   moves.
+3. **Synthetic events carry *client* coordinates, and the stage is not at the top of the
+   page.** The stage sits 51 px below the navbar, so a press computed in stage space lands
+   51 px high, the hit test resolves to the Stage instead of a Rect, and "drag a shape"
+   quietly becomes "drag nothing" — `konvaWasDragging: false` with a shape that never moves.
+   Same family as PR 7's trap 1.
+4. **Never set the stage transform imperatively — React owns it.** `stage.scale()` from the
+   console looks like a viewport reset and is not: react-konva only writes a prop that
+   *changed*, so the imperative scale survives every later pan while React keeps its own
+   value, and the two diverge. A "pan at 500 shapes" run taken that way ended with the
+   viewport 18,000 px outside the world and **0 shapes on screen** — a clean 60 FPS
+   measurement of an empty canvas. Every run above asserts the on-screen shape count.
+5. **Konva schedules its own redraws through rAF**, so with rAF frozen they queue and then
+   flush as a burst inside the next measurement window, arriving as 40–90 ms spikes that
+   look exactly like real jank. `Konva.autoDrawEnabled = false` while the harness owns the
+   painting is what separates them.
+
+And a sixth that is really a lesson about instruments rather than harnesses: **the synthetic
+peer was more expensive than the thing it was measuring.** Dispatching mousemoves as fast as
+a MessageChannel loop allows put 1,414 events/second through Konva's hit test over 500
+shapes in the *same renderer process* as the tab under test, and the resulting "30 FPS during
+zoom with two users" was completely convincing. The control that caught it — identical spin,
+publishing disabled — took two minutes and should have been the first thing run, not the
+last.
 
 ---
 
@@ -1062,16 +1422,19 @@ Low effort, high grading yield. Do not skip this for more features.
       "Try it instantly" — gates 4, 5 and 6 all need two identities `[F7]`
 - [ ] Leave 3–5 rectangles permanently in the canvas document `[R22]`
 - [ ] One-line hint that fades after the first placement `[R22]`
-- [ ] "Seed 500" / "Clear all" as **one transaction writing the whole array** — 500
-      sequential transactions against one document would serialize and take minutes `[R22]`
+- [x] ~~"Seed 500" / "Clear all" as **one transaction writing the whole array**~~ —
+      **landed in PR 9**, which cannot profile F10's 500-object target without a way to
+      create 500 objects. One transaction each, appending rather than replacing `[R22]`
 - [ ] `README.md` — setup guide, deployed link, the documented transactional-LWW +
       soft-lock conflict choice, and a link to [ARCHITECTURE.md](ARCHITECTURE.md)
       `[submission req.]`
 
-**🧪 `shapeOps.test.ts` (seed case) — Tier 2 · ~5m**
-- [ ] `buildSeed(500)` returns **one array of 500 valid shapes**, every field populated —
+**🧪 `shapeOps.test.ts` (seed case) — Tier 2 · ~5m — ✅ done in PR 9, 6/6 green**
+- [x] `buildSeed(500)` returns **one array of 500 valid shapes**, every field populated —
       a missing field here writes malformed data to 500 entries at once
-- [ ] The result stays comfortably under the 1 MiB document ceiling `[R24]`
+- [x] The result stays comfortably under the 1 MiB document ceiling `[R24]`
+- [x] *Added, after the seed shipped stacking every block on the same origin:* no two
+      shapes share a position, and successive batches never reuse a coordinate. See PR 9.
 
 **Done when:** a stranger can open the URL and be a second live user in under 30 seconds.
 
@@ -1168,12 +1531,14 @@ than late:**
    `java -version` fails.~~ **Superseded:** a JRE is installed and PR 2's `rules.test.ts`
    is done and green, so the setup cost is already paid. Only PR 8's `concurrency.test.ts`
    remains cuttable here, and it would cost R23 its cheapest automated cover.
-2. **PR 9's memoisation and the 500-object target** (−1.5h). F10 is a stated target, not a
-   gate item. Keep the layer separation, which is 10 minutes and prevents the worst case.
+2. ~~**PR 9's memoisation and the 500-object target** (−1.5h).~~ **Superseded: done.** And
+   the memoisation turned out to be the part that mattered — the layer separation this item
+   recommends keeping was already in place from PRs 4–7 and was *not* where the cost was.
 3. **Tier 2 unit tests** (−0.75h) — `placement`, `coords` part 1, `helpers`, `authErrors`,
    `shapeLocks`, the seed case.
-4. **PR 10's Seed 500 button** (−0.4h) — keep the demo accounts and the seeded shapes,
-   which are worth more than everything else in that PR combined.
+4. ~~**PR 10's Seed 500 button** (−0.4h)~~ — **no longer cuttable**: it landed in PR 9 as
+   the only way to profile F10 at all. The demo accounts and seeded shapes remain the
+   valuable part of PR 10.
 
 Taking 1 and 2 lands at **~22.7h**. Taking 1–3 lands at **~22h**.
 

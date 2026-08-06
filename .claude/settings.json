@@ -24,7 +24,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"/Users/zed/Desktop/collabcanvas/.claude/sounds/play-approval.sh\""
+            "command": "bash \"/Users/zed/Desktop/collabcanvas/.claude/sounds/play_approval.sh\""
           }
         ]
       }

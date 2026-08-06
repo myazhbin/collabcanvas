@@ -15,17 +15,16 @@ import {
 import { useCursors } from '../../hooks/useCursors'
 import { useCanvas } from '../../hooks/useCanvas'
 import { useAuth } from '../../hooks/useAuth'
+import { useStableValue } from '../../hooks/useStableValue'
 import { useWindowEvent } from '../../hooks/useWindowEvent'
 import { shouldPlace } from '../../utils/placement'
 import { collectRemoteDrags } from '../../utils/shapeDiff'
-import { canDrag, lockHolder } from '../../utils/shapeLocks'
-import { generateUserColor } from '../../utils/helpers'
 import { sessionId } from '../../utils/session'
 import { Cursor } from '../collaboration/Cursor'
 import { Backdrop } from './Backdrop'
 import { Controls } from './Controls'
 import { Hud } from './Hud'
-import { Rectangle } from './Rectangle'
+import { ShapesLayer } from './ShapesLayer'
 import type { SessionNode } from '../../utils/types'
 
 /**
@@ -54,34 +53,37 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
 
   const myUid = user?.uid ?? null
 
+  // Both of the derived values below are wrapped in `useStableValue`, and that wrapper is
+  // the difference between the memoised `ShapesLayer` working and being decorative. A
+  // cursor tick hands this component a brand-new `sessions` object 20 times a second per
+  // peer; without the wrapper each derived Set and Map is a new reference every tick, the
+  // layer's props always differ, and 500 React elements are rebuilt and compared to
+  // conclude nothing moved. Comparing here is O(peers). What it protects is O(shapes) [R7].
+
   /** Shapes some other session is dragging right now, at their live in-flight position —
    *  PRD §4.3's handoff. Falls back to the committed Firestore value when absent. */
-  const remoteDrags = useMemo(() => collectRemoteDrags(sessions, sessionId), [sessions])
+  const remoteDrags = useStableValue(
+    useMemo(() => collectRemoteDrags(sessions, sessionId), [sessions]),
+    sameDrags,
+  )
 
   /**
    * uids with a live session. A `draggedBy` lock lives in Firestore, which `onDisconnect`
    * cannot reach — so without this a client that crashes mid-drag leaves a rectangle
    * nobody can ever move again. The session node vanishing is the liveness proof [R10].
    */
-  const liveUids = useMemo(
-    () =>
-      new Set(
-        Object.values(sessions)
-          .map((node) => node?.uid)
-          .filter((uid): uid is string => typeof uid === 'string' && uid.length > 0),
-      ),
-    [sessions],
+  const liveUids = useStableValue(
+    useMemo(
+      () =>
+        new Set(
+          Object.values(sessions)
+            .map((node) => node?.uid)
+            .filter((uid): uid is string => typeof uid === 'string' && uid.length > 0),
+        ),
+      [sessions],
+    ),
+    sameUids,
   )
-
-  /** Colour of whoever holds each locked shape, for the outline. */
-  const lockColours = useMemo(() => {
-    const colours = new Map<string, string>()
-    for (const shape of shapes) {
-      const holder = lockHolder(shape, myUid, liveUids)
-      if (holder) colours.set(shape.id, generateUserColor(holder))
-    }
-    return colours
-  }, [shapes, myUid, liveUids])
 
   /** Where the pan started, in client coords, plus the viewport it started from.
    *  Deltas are taken against this rather than accumulated frame to frame — accumulating
@@ -335,32 +337,23 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
         </Layer>
 
         {/* Shapes get their own Layer — their own canvas — so a cursor or backdrop tick
-            can never repaint 500 rectangles [R7].
-
-            `listening` goes off while space is held: otherwise a space-drag that happens
-            to start over a rectangle both pans the stage and drags the shape, because
-            Konva sees a press on a draggable node and the Stage sees the pan modifier.
-            Switching the whole layer off is one prop and leaves nothing to disagree. */}
-        <Layer listening={!spaceHeld}>
-          {shapes.map((shape) => (
-            <Rectangle
-              key={shape.id}
-              shape={shape}
-              selected={shape.id === selectedId}
-              // Three conditions. Select mode, because in Rectangle mode a press on a shape
-              // must stay a press on a shape [R13]; and the soft lock, so a shape another
-              // live user is holding cannot be grabbed out from under them [R10].
-              draggable={tool === 'select' && canDrag(shape, myUid, liveUids)}
-              lockColour={lockColours.get(shape.id) ?? null}
-              remote={remoteDrags.get(shape.id) ?? null}
-              scale={viewport.scale}
-              onSelect={select}
-              onDragStart={beginDrag}
-              onDragMove={moveDrag}
-              onDragEnd={endDrag}
-            />
-          ))}
-        </Layer>
+            can never repaint 500 rectangles [R7]. Memoised, and deliberately handed
+            nothing off the viewport: panning and zooming move the Stage, which Konva
+            applies to the whole layer, and neither needs a single React render in here. */}
+        <ShapesLayer
+          shapes={shapes}
+          selectedId={selectedId}
+          myUid={myUid}
+          liveUids={liveUids}
+          remoteDrags={remoteDrags}
+          // In Rectangle mode a press on a shape must stay a press on a shape [R13].
+          dragEnabled={tool === 'select'}
+          listening={!spaceHeld}
+          onSelect={select}
+          onDragStart={beginDrag}
+          onDragMove={moveDrag}
+          onDragEnd={endDrag}
+        />
       </Stage>
 
       {/* The cursor overlay: absolutely-positioned DOM *above* the stage, never Konva
@@ -405,6 +398,35 @@ function wheelIntent(e: WheelEvent): 'zoom' | 'pan' {
   if (e.deltaMode !== 0) return 'zoom'
   if (e.deltaX !== 0) return 'pan'
   return Math.abs(e.deltaY) >= 100 && Number.isInteger(e.deltaY) ? 'zoom' : 'pan'
+}
+
+/**
+ * The two equivalence tests behind `useStableValue`, both O(peers).
+ *
+ * They answer "does the shapes layer have any reason to look different?", which is a much
+ * smaller question than "did `sessions` change" — a cursor moving changes `sessions` twenty
+ * times a second and changes neither of these at all.
+ */
+function sameDrags(
+  a: ReadonlyMap<string, { x: number; y: number }>,
+  b: ReadonlyMap<string, { x: number; y: number }>,
+): boolean {
+  if (a.size !== b.size) return false
+
+  for (const [id, position] of a) {
+    const other = b.get(id)
+    if (!other || other.x !== position.x || other.y !== position.y) return false
+  }
+
+  return true
+}
+
+function sameUids(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false
+
+  for (const uid of a) if (!b.has(uid)) return false
+
+  return true
 }
 
 /** Whether a key event belongs to something that already means something else — a form

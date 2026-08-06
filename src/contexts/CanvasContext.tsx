@@ -8,6 +8,7 @@ import { startDragChannel, type DragChannel } from '../services/cursorService'
 import { PALETTE, SHAPE, WORLD } from '../utils/constants'
 import { clampShapeToWorld } from '../utils/placement'
 import { shapeDiff } from '../utils/shapeDiff'
+import { buildSeed, MAX_SHAPES } from '../utils/shapeOps'
 import type { Point } from '../utils/coords'
 import type { CanvasDoc, Shape } from '../utils/types'
 
@@ -24,7 +25,19 @@ export type CanvasContextValue = {
   deleteShape: (id: string) => void
   beginDrag: (id: string) => void
   moveDrag: (id: string, x: number, y: number) => void
-  endDrag: (id: string, x: number, y: number) => void
+  /**
+   * Resolves to the position the caller must force back onto the Konva node, or `null` when
+   * the commit landed and the node is already right.
+   *
+   * It has to be pushed rather than left to the round trip: Konva owns the node's position
+   * during a drag and react-konva only writes `x`/`y` back when the **prop** changes. After
+   * a failed commit the prop is unchanged — it is still the pre-drag value — so nothing is
+   * written and the node sits at a position no other client has, for good.
+   */
+  endDrag: (id: string, x: number, y: number) => Promise<{ x: number; y: number } | null>
+  /** Append `count` rectangles in one transaction — the 500-object profile, and [R22]. */
+  seed: (count: number) => void
+  clearAll: () => void
 }
 
 // Ships beside its provider for the same reason `AuthContext` does — see the note there.
@@ -195,6 +208,44 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     void canvasService.deleteShape(id)
   }, [])
 
+  const seed = useCallback(
+    (count: number) => {
+      if (!uid) return
+
+      // Firestore rejects a write that would push the document past 1 MiB, and
+      // `mutateShapes` can only catch that and log it — to the user it looks like the
+      // button did nothing, and then like drags stop saving [R24]. Refuse out here, where
+      // there is something to say about it.
+      const room = MAX_SHAPES - shapes.length
+      if (room <= 0) {
+        console.warn(
+          `canvas is at its ${MAX_SHAPES}-shape ceiling — clear some before seeding more [R24]`,
+        )
+        return
+      }
+
+      // The non-deterministic parts — the id prefix and the clock — are resolved out here.
+      // `buildSeed` itself stays a pure function of its inputs, and the array it returns is
+      // closed over by the transaction body rather than rebuilt on each retry [R23].
+      //
+      // `existing` is what stops a second "Seed 500" landing exactly on top of the first.
+      void canvasService.seedShapes(
+        buildSeed(Math.min(count, room), {
+          uid,
+          now: Date.now(),
+          idPrefix: crypto.randomUUID(),
+          existing: shapes.length,
+        }),
+      )
+    },
+    [uid, shapes.length],
+  )
+
+  const clearAll = useCallback(() => {
+    setSelectedId(null)
+    void canvasService.clearShapes()
+  }, [])
+
   // ---- Drag lifecycle ----------------------------------------------------------------
   const beginDrag = useCallback(
     (id: string) => {
@@ -222,13 +273,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const endDrag = useCallback(
-    (id: string, x: number, y: number) => {
+    async (id: string, x: number, y: number) => {
       if (!uid) {
         setDragging((current) => without(current, id))
-        return
+        return null
       }
 
-      // Clamped again here, not only in `Rectangle`. That call site handles the *visual*
+      // Clamped again here, not only in `ShapesLayer`. That call site handles the *visual*
       // correction; this one is the invariant — nothing may commit a shape outside the
       // world, whatever called it.
       const shape = shapesRef.current.find((s) => s.id === id)
@@ -238,17 +289,41 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
         y = inside.y
       }
 
-      void (async () => {
+      return await (async () => {
         // Commit first, clear the in-flight value second. The other order leaves a gap in
         // which remote clients have no `drag` to render and the old Firestore position is
         // still the newest thing they have seen — so the rectangle visibly snaps backward
         // for a frame before jumping forward again.
-        await canvasService.commitShapePosition(id, x, y, uid)
+        const result = await canvasService.commitShapePosition(id, x, y, uid)
+
+        // A commit that failed outright is the one case that must not be shrugged off.
+        // `commitPosition` releases the lock as part of the same write, so if the write
+        // never landed the lock is still ours — and a `draggedBy` nobody clears leaves the
+        // rectangle ringed and undraggable for every other user, permanently [R10]. It also
+        // means the position the pointer just chose does not exist anywhere but this tab,
+        // which is how two clients end up disagreeing about where a shape is.
+        let snapBackTo: { x: number; y: number } | null = null
+
+        if (!result.ok) {
+          console.error(
+            `move of ${id} was not saved — releasing the lock and snapping the shape back [R10]`,
+          )
+          await canvasService.releaseMyLocks(uid)
+
+          // Whatever the document still holds is what every other client is showing, so it
+          // is what this one has to show too. `shapesRef` is exactly that: the id has been
+          // echo-suppressed for the whole drag, so its entry is untouched [R6].
+          const committed = shapesRef.current.find((s) => s.id === id)
+          if (committed) snapBackTo = { x: committed.x, y: committed.y }
+        }
+
         drag.current?.publish(null)
 
         // Released only after the transaction resolves, or the echo of your own commit
         // arrives while the id is already unsuppressed and fights the final position [R6].
         setDragging((current) => without(current, id))
+
+        return snapBackTo
       })()
     },
     [uid],
@@ -266,8 +341,22 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       beginDrag,
       moveDrag,
       endDrag,
+      seed,
+      clearAll,
     }),
-    [shapes, tool, selectedId, select, placeAt, deleteShape, beginDrag, moveDrag, endDrag],
+    [
+      shapes,
+      tool,
+      selectedId,
+      select,
+      placeAt,
+      deleteShape,
+      beginDrag,
+      moveDrag,
+      endDrag,
+      seed,
+      clearAll,
+    ],
   )
 
   return <CanvasContext.Provider value={value}>{children}</CanvasContext.Provider>

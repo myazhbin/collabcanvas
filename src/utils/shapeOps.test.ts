@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   addShape,
+  buildSeed,
   claimLock,
   commitPosition,
+  estimateDocBytes,
+  MAX_SHAPES,
   patchShape,
   releaseAllLocks,
   releaseLock,
   removeShape,
 } from './shapeOps'
+import { WORLD } from './constants'
 import type { Shape } from './types'
 
 /**
@@ -198,5 +202,92 @@ describe('commitPosition — the lockout is authoritative, not advisory [R10]', 
     const twice = commitPosition(once, 'a', { x: 42 }, 'alice')
 
     expect(twice).toEqual(once)
+  })
+})
+
+describe('buildSeed — PR 10 seed case [R22,R24]', () => {
+  const opts = (over: Partial<Parameters<typeof buildSeed>[1]> = {}) => ({
+    uid: 'alice',
+    now: 1000,
+    idPrefix: 'seed1',
+    ...over,
+  })
+
+  it('returns one array of `count` valid shapes with every field populated', () => {
+    // A missing field here writes malformed data to five hundred entries at once, and the
+    // only symptom is something far downstream — `generateUserColor(undefined)` throwing,
+    // or a shape that can never be dragged because `draggedBy` is `undefined`.
+    const seeded = buildSeed(500, opts())
+
+    expect(seeded).toHaveLength(500)
+    for (const s of seeded) {
+      expect(typeof s.id).toBe('string')
+      expect(s.id.length).toBeGreaterThan(0)
+      expect(Number.isFinite(s.x)).toBe(true)
+      expect(Number.isFinite(s.y)).toBe(true)
+      expect(s.w).toBeGreaterThan(0)
+      expect(s.h).toBeGreaterThan(0)
+      expect(s.fill).toMatch(/^#[0-9a-f]{6}$/i)
+      expect(s.createdBy).toBe('alice')
+      expect(s.updatedBy).toBe('alice')
+      expect(s.updatedAt).toBe(1000)
+      expect(s.draggedBy).toBeNull()
+    }
+  })
+
+  it('gives every shape a unique id', () => {
+    const seeded = buildSeed(500, opts())
+    expect(new Set(seeded.map((s) => s.id)).size).toBe(500)
+  })
+
+  it('never places two shapes at the same position', () => {
+    // The bug this file exists to prevent a second time: two rectangles at one coordinate
+    // are the same size and colour, so they are one rectangle to the eye. Drag the top one
+    // and its twin is uncovered — which reads exactly like the shape you just moved
+    // snapping back, and is indistinguishable from a sync failure.
+    const seeded = buildSeed(500, opts())
+    const positions = new Set(seeded.map((s) => `${s.x},${s.y}`))
+
+    expect(positions.size).toBe(500)
+  })
+
+  it('keeps every shape inside the world', () => {
+    const seeded = buildSeed(500, opts())
+
+    for (const s of seeded) {
+      expect(s.x).toBeGreaterThanOrEqual(0)
+      expect(s.y).toBeGreaterThanOrEqual(0)
+      expect(s.x + s.w).toBeLessThanOrEqual(WORLD.width)
+      expect(s.y + s.h).toBeLessThanOrEqual(WORLD.height)
+    }
+  })
+
+  it('tiles successive batches instead of stacking them', () => {
+    // Seeding twice used to land the second block pixel-perfect on the first. Every batch
+    // must occupy ground the previous ones did not.
+    const seen = new Set<string>()
+
+    for (let batch = 0; batch < 4; batch++) {
+      const seeded = buildSeed(500, opts({ idPrefix: `seed${batch}`, existing: batch * 500 }))
+      for (const s of seeded) {
+        const key = `${s.x},${s.y}`
+        expect(seen.has(key)).toBe(false)
+        seen.add(key)
+      }
+    }
+
+    expect(seen.size).toBe(2000)
+  })
+
+  it('stays comfortably under the 1 MiB document ceiling at the cap [R24]', () => {
+    // Two bounds, and the *lower* one is the one that bit. Every mutation rewrites the
+    // whole array, so the array's size is the size of every write: at 1,456 shapes two
+    // thirds of one user's drags were lost to transaction contention long before anything
+    // approached 1 MiB. The cap has to clear F10's 500-object target and still leave the
+    // document small enough that a write completes before the next one starts.
+    const full = buildSeed(MAX_SHAPES, opts())
+
+    expect(MAX_SHAPES).toBeGreaterThanOrEqual(500)
+    expect(estimateDocBytes(full)).toBeLessThan(1024 * 1024 * 0.3)
   })
 })
