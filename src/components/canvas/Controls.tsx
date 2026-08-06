@@ -6,17 +6,6 @@ const TOOLS: { id: Tool; label: string; hint: string }[] = [
   { id: 'rectangle', label: 'Rectangle', hint: 'R — click empty canvas to place' },
 ]
 
-/**
- * The tool switch, floating over the stage.
- *
- * Deliberately visible rather than modal-by-modifier: a grader has thirty seconds to work
- * out that this canvas does anything at all, and a toolbar answers that before they have
- * to guess [R22].
- *
- * Seed 500 / Clear all landed here early, in PR 9 rather than PR 10: F10's 500-object
- * profile cannot be run without a way to put 500 objects on the canvas. Each is **one**
- * transaction writing the whole array [R14,R22].
- */
 export function Controls() {
   const { tool, setTool, selectedId, deleteShape, seed, clearAll } = useCanvas()
 

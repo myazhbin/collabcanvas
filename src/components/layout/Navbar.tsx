@@ -3,15 +3,10 @@ import { useAuth } from '../../hooks/useAuth'
 import { useConnection } from '../../hooks/useConnection'
 import { Avatar } from '../collaboration/Avatar'
 import { Presence } from '../collaboration/Presence'
-import { generateUserColor } from '../../utils/helpers'
+import { userColour } from '../../utils/helpers'
 import type { PresenceNode } from '../../utils/presenceUtils'
 import { sessionId } from '../../utils/session'
 
-/**
- * Online stack, connection badge, user chip, sign out. `online` is passed in rather than
- * pulled from `usePresence` here: that hook *publishes* this tab's session node as well
- * as reading everyone's, so calling it twice would start two publishers.
- */
 export function Navbar({ online }: { online: PresenceNode[] }) {
   const { displayName, user, logOut } = useAuth()
   const { connected, offset } = useConnection()
@@ -22,8 +17,6 @@ export function Navbar({ online }: { online: PresenceNode[] }) {
     try {
       await logOut()
     } finally {
-      // Unlike the auth forms this component survives the transition for a beat, so
-      // the flag has to come back down or a failed sign-out leaves a dead button.
       setBusy(false)
     }
   }
@@ -47,14 +40,11 @@ export function Navbar({ online }: { online: PresenceNode[] }) {
       <div className="ml-auto flex items-center gap-4">
         <Presence online={online} />
 
-        {/* The session id rides along in the tooltip. Two tabs of one account must show
-            two *different* ids while collapsing to a single avatar in the stack above —
-            that pairing is R2, and this is where you check it by hand. */}
         <span
           className="flex items-center gap-2"
           title={`${user?.email ?? ''}\nsession ${sessionId.slice(0, 8)}`}
         >
-          <Avatar name={displayName} colour={user ? generateUserColor(user.uid) : undefined} />
+          <Avatar name={displayName} colour={user ? userColour(user.uid) : undefined} />
           <span className="text-sm text-neutral-700">{displayName}</span>
         </span>
 

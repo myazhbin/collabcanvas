@@ -1,18 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { throttle } from './throttle'
 
-/**
- * Tier 1 · PR 6 — R16.
- *
- * The bug this file exists to prevent is close to untestable by hand: it needs two
- * browsers, and when you find it, it looks like generic network lag rather than a
- * missing trailing edge. The symptom is a remote cursor parking a few pixels behind
- * wherever the pointer actually stopped, every single time it stops.
- *
- * `vi.useFakeTimers()` fakes `Date` alongside `setTimeout`, so the timestamp half of the
- * throttle advances in lockstep with the timer half — which is the only reason a
- * timestamp throttle can be tested deterministically at all.
- */
 describe('throttle', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -34,7 +22,6 @@ describe('throttle', () => {
     vi.advanceTimersByTime(10)
     send('c')
 
-    // 20 ms into a 50 ms window: still just the leading call.
     expect(fn).toHaveBeenCalledTimes(1)
   })
 
@@ -44,13 +31,10 @@ describe('throttle', () => {
 
     send({ x: 0 })
     vi.advanceTimersByTime(20)
-    send({ x: 700 }) // suppressed — and this is where the pointer stopped
+    send({ x: 700 })
 
     expect(fn).toHaveBeenCalledTimes(1)
 
-    // Nothing else happens: no further pointer events, no rAF tick, nothing to
-    // piggyback on. The flush has to be self-starting, or {x: 700} is simply lost and
-    // every other browser leaves that cursor sitting at 0 [R16].
     vi.advanceTimersByTime(30)
 
     expect(fn).toHaveBeenCalledTimes(2)
@@ -82,8 +66,6 @@ describe('throttle', () => {
     send('lead')
     send('pending')
 
-    // Unmount, or the tab being hidden. Either way a write must not land afterwards —
-    // on hide it would resurrect the cursor the visibilitychange handler just cleared.
     send.cancel()
     vi.advanceTimersByTime(500)
 
@@ -95,8 +77,6 @@ describe('throttle', () => {
     const fn = vi.fn()
     const send = throttle(fn, 50)
 
-    // One call, nothing held back — so the window must close without a trailing flush
-    // restating a position that has not moved [R14].
     send('only')
     vi.advanceTimersByTime(500)
 
@@ -111,8 +91,6 @@ describe('throttle', () => {
     vi.advanceTimersByTime(50)
     send('second')
 
-    // Immediately, not on a timer. Delaying this one by a whole window would put every
-    // sample of a steadily-moving pointer 50 ms late on the wire, on top of the wire.
     expect(fn).toHaveBeenCalledTimes(2)
     expect(fn).toHaveBeenLastCalledWith('second')
   })
@@ -121,17 +99,12 @@ describe('throttle', () => {
     const fn = vi.fn()
     const send = throttle(fn, 50)
 
-    // 100 Hz of pointer samples for one second — roughly what a real mousemove stream
-    // off a decent mouse looks like.
     for (let i = 0; i < 100; i++) {
       send(i)
       vi.advanceTimersByTime(10)
     }
     vi.advanceTimersByTime(50)
 
-    // The upper bound is the one that matters: 20 Hz is the send rate PRD §4.5's
-    // monthly RTDB bandwidth projection is priced against, and there is no billing
-    // valve behind it [R14].
     expect(fn.mock.calls.length).toBeGreaterThanOrEqual(20)
     expect(fn.mock.calls.length).toBeLessThanOrEqual(21)
     expect(fn).toHaveBeenLastCalledWith(99)

@@ -6,29 +6,23 @@ import { DEMO_ACCOUNTS, DEMO_PASSWORD, type DemoAccount } from '../../utils/demo
 import { Field, FormError, SubmitButton } from './FormControls'
 import { Signup } from './Signup'
 
-/**
- * The signed-out screen: the demo block, the email/password form, the Google button,
- * and the toggle to `Signup`. Both sign-in methods live here so the Google path is
- * written once.
- */
 export function Login() {
   const [mode, setMode] = useState<'login' | 'signup'>('login')
+  const isLogin = mode === 'login'
 
   return (
     <div className="flex h-full items-center justify-center bg-neutral-100 p-6">
       <div className="w-full max-w-sm rounded-2xl border border-neutral-200 bg-white p-8 shadow-sm">
         <h1 className="text-lg font-semibold text-neutral-900">CollabCanvas</h1>
         <p className="mt-1 mb-6 text-sm text-neutral-500">
-          {mode === 'login'
+          {isLogin
             ? 'Sign in to join the shared canvas.'
             : 'Create an account to join the shared canvas.'}
         </p>
 
-        {/* Above the form, not below it. This is the fastest route into the app and the one
-            thing on this screen a first-time visitor should see first [F7,R22]. */}
-        {mode === 'login' && <DemoAccounts />}
+        {isLogin && <DemoAccounts />}
 
-        {mode === 'login' ? <EmailPasswordForm /> : <Signup />}
+        {isLogin ? <EmailPasswordForm /> : <Signup />}
 
         <div className="my-5 flex items-center gap-3">
           <span className="h-px flex-1 bg-neutral-200" />
@@ -39,13 +33,13 @@ export function Login() {
         <GoogleButton />
 
         <p className="mt-6 text-center text-sm text-neutral-500">
-          {mode === 'login' ? 'No account yet?' : 'Already have an account?'}{' '}
+          {isLogin ? 'No account yet?' : 'Already have an account?'}{' '}
           <button
             type="button"
-            onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}
+            onClick={() => setMode(isLogin ? 'signup' : 'login')}
             className="font-medium text-blue-600 hover:underline"
           >
-            {mode === 'login' ? 'Create one' : 'Sign in'}
+            {isLogin ? 'Create one' : 'Sign in'}
           </button>
         </p>
       </div>
@@ -53,18 +47,6 @@ export function Login() {
   )
 }
 
-/**
- * "Try it instantly" — three one-click identities `[F7,R22]`.
- *
- * Gate items 4, 5 and 6 all need two people signed in at once, so the credentials are
- * printed as well as wired to a button: a grader driving a second browser will often type
- * them rather than come back to this screen. The first click on a chip creates the account
- * if it does not exist yet — see `authService.signInAsDemo`.
- *
- * `busy` holds the *email* rather than a boolean, so the chip that was clicked can say so
- * while the other two only grey out. Three buttons all reading "Signing in…" would leave a
- * grader unsure which identity they are about to become.
- */
 function DemoAccounts() {
   const { signInAsDemo } = useAuth()
   const [busy, setBusy] = useState<string | null>(null)
@@ -74,8 +56,6 @@ function DemoAccounts() {
     setBusy(account.email)
     setError(null)
 
-    // Not cleared on success: the whole screen unmounts when the auth gate flips, and
-    // re-enabling the chips for those frames is long enough to start a second sign-in.
     void signInAsDemo(account).catch((err: unknown) => {
       setError(mapAuthError(err))
       setBusy(null)
@@ -102,9 +82,6 @@ function DemoAccounts() {
             <span className="font-medium">
               {busy === account.email ? 'Signing in…' : account.name}
             </span>
-            {/* Never `truncate`: this is meant to be *read* and retyped into a second
-                browser, so an address that does not fit has to wrap rather than lose its
-                tail to an ellipsis. */}
             <span className="font-mono text-xs break-all text-neutral-500">{account.email}</span>
           </button>
         ))}
@@ -153,35 +130,15 @@ function EmailPasswordForm() {
   )
 }
 
-/**
- * Not built on `useAuthSubmit`, and the difference is the whole reason this is its own
- * component: `signInWithPopup` has to be reached synchronously from the click, so the call
- * is the first statement and the state updates follow it. Anything awaited in front lands
- * the call outside the user-gesture window and the browser blocks the popup — which
- * presents as the app hanging, not as a blocked popup [R20].
- */
 function GoogleButton() {
   const { signInWithGoogle } = useAuth()
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  const onClick = () => {
-    const pending = signInWithGoogle()
-
-    setError(null)
-    setBusy(true)
-
-    pending.catch((err) => {
-      setError(mapAuthError(err))
-      setBusy(false)
-    })
-  }
+  const { onSubmit, error, busy } = useAuthSubmit(signInWithGoogle)
 
   return (
     <>
       <button
         type="button"
-        onClick={onClick}
+        onClick={onSubmit}
         disabled={busy}
         className="flex w-full items-center justify-center gap-2 rounded-lg border border-neutral-300 px-3 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-60"
       >

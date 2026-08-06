@@ -14,11 +14,6 @@ function App() {
   )
 }
 
-/**
- * The three-state gate [R4]. The `loading` branch is why this is three states and not
- * a boolean: `onAuthStateChanged` doesn't fire synchronously, so rendering `Login` for
- * a null user flashes the sign-in form at a signed-in user on every single reload.
- */
 function AuthGate() {
   const { status } = useAuth()
 
@@ -28,15 +23,6 @@ function AuthGate() {
   return <CanvasScreen />
 }
 
-/**
- * `usePresence` lives here, above both consumers, because it *publishes* this tab's
- * session node as well as reading everyone's — calling it in two components would start
- * two publishers and two listeners. Cursors come off the same call: one listener on
- * `/sessions/{canvas}` feeds both, and the two differ only in keying — `online` is one
- * entry per uid, `sessions` is one per sessionId [R2].
- *
- * It also sits below the gate, so the listener mounts only once auth has resolved [R4].
- */
 function CanvasScreen() {
   const { online, sessions } = usePresence()
 
@@ -50,8 +36,6 @@ function CanvasScreen() {
   )
 }
 
-/** Neutral on purpose — a splash that resembles the login form defeats the point of
- *  having a loading state at all [R4]. */
 function Splash() {
   return (
     <div className="flex h-full items-center justify-center bg-neutral-100">

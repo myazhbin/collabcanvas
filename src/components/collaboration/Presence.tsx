@@ -6,15 +6,9 @@ import type { PresenceNode } from '../../utils/presenceUtils'
 
 const MAX_SHOWN = 5
 
-/**
- * The online stack. One avatar per **uid**, not per tab — `usePresence` has already
- * collapsed them, because two tabs of one account are two session nodes and one human
- * [R2]. Cursors go the other way in PR 6: one per session.
- */
 export function Presence({ online }: { online: PresenceNode[] }) {
   const { user } = useAuth()
 
-  // You first, so your own avatar holds still while others come and go.
   const ordered = useMemo(() => {
     const mine = online.filter((node) => node.uid === user?.uid)
     const others = online.filter((node) => node.uid !== user?.uid)

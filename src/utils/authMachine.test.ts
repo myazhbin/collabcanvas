@@ -9,21 +9,8 @@ import {
   type AuthState,
 } from './authMachine'
 
-/**
- * Tier 2 · PR 3. The interesting assertions are the timer ones: a `loading` state that
- * never resolves is a permanent white screen, and it only reproduces in Safari, on the
- * deployed build, sometimes [R4].
- */
-
-/** Only `uid` is read. The object identity is the point — `startAuthMachine` must hand
- *  back this exact instance, because a spread copy would drop `getIdToken` [R11]. */
 const alice = { uid: 'alice', getIdToken: async () => 'id-token' } as unknown as User
 
-/**
- * Drives the shipped `startAuthMachine` with a stand-in for `onAuthStateChanged`,
- * accumulating states through the shipped reducer. Between them these are every line
- * of `AuthContext`'s effect.
- */
 function harness(timeoutMs = AUTH_TIMEOUT_MS) {
   let emit: ((user: User | null) => void) | null = null
   let state: AuthState = initialAuthState
@@ -77,8 +64,6 @@ describe('authReducer', () => {
   it('ignores a timeout once the observer has answered', () => {
     const signedIn = authReducer(initialAuthState, { type: 'authStateChanged', user: alice })
 
-    // Same object back, not merely an equal one: a re-render here would be a bug of
-    // its own, and identity is the cheapest way to assert "did nothing".
     expect(authReducer(signedIn, { type: 'timeout' })).toBe(signedIn)
   })
 })
@@ -101,7 +86,6 @@ describe('startAuthMachine', () => {
 
     vi.advanceTimersByTime(1)
 
-    // The assertion that prevents a permanent white screen in Safari [R4].
     expect(machine.state.status).toBe('signedOut')
   })
 
@@ -111,7 +95,6 @@ describe('startAuthMachine', () => {
     vi.advanceTimersByTime(AUTH_TIMEOUT_MS)
     expect(machine.state.status).toBe('signedOut')
 
-    // A slow rehydration is not a stuck state: the observer wins whenever it lands.
     machine.emit(alice)
     expect(machine.state.status).toBe('signedIn')
 
@@ -125,8 +108,6 @@ describe('startAuthMachine', () => {
     machine.emit(alice)
     vi.advanceTimersByTime(AUTH_TIMEOUT_MS * 10)
 
-    // Without the clearTimeout — or the reducer's guard behind it — a signed-in user
-    // gets thrown back to the login screen four seconds after signing in.
     expect(machine.state.status).toBe('signedIn')
     expect(machine.state.user).toBe(alice)
   })

@@ -1,27 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { collectRemoteDrags, shapeDiff } from './shapeDiff'
+import { shape } from './testFixtures'
 import type { Shape } from './types'
 
-/**
- * Tier 1 · PR 8 — the most valuable test file in the plan. Every assertion here maps to a
- * bug whose only symptom is "sync is broken": a canvas that drops to single-digit frame
- * rates, or a rectangle that fights your pointer while you drag it.
- */
-const shape = (id: string, over: Partial<Shape> = {}): Shape => ({
-  id,
-  x: 10,
-  y: 20,
-  w: 120,
-  h: 80,
-  fill: '#2563eb',
-  createdBy: 'alice',
-  updatedAt: 1000,
-  updatedBy: 'alice',
-  draggedBy: null,
-  ...over,
-})
-
-/** A distinct object with identical values — what actually comes off the wire. */
 const clone = (s: Shape): Shape => ({ ...s })
 
 describe('referential identity — the R7 mitigation', () => {
@@ -31,8 +12,6 @@ describe('referential identity — the R7 mitigation', () => {
 
     const { shapes } = shapeDiff(previous, incoming)
 
-    // Not toEqual. `memo` compares by reference, so equal-but-new objects re-render
-    // everything and the whole exercise is pointless.
     expect(shapes[0]).toBe(previous[0])
     expect(shapes[1]).toBe(previous[1])
   })
@@ -50,7 +29,6 @@ describe('referential identity — the R7 mitigation', () => {
   })
 
   it('reuses 499 of 500 references when one shape moves', () => {
-    // The actual performance claim, asserted rather than assumed.
     const previous = Array.from({ length: 500 }, (_, i) => shape(`s${i}`))
     const incoming = previous.map(clone)
     incoming[250] = { ...incoming[250], x: 4242 }
@@ -63,8 +41,6 @@ describe('referential identity — the R7 mitigation', () => {
   })
 
   it('returns the previous array itself when nothing at all changed', () => {
-    // The array's own identity is the "nothing moved" signal — the caller's cheap test for
-    // whether a snapshot is worth a setState at all.
     const previous = [shape('a'), shape('b')]
     const { shapes } = shapeDiff(previous, previous.map(clone))
 
@@ -91,8 +67,6 @@ describe('additions and removals, detected from the array alone', () => {
   })
 
   it('notices a reorder even when every shape is otherwise identical', () => {
-    // Same ids, same values, same length — only the positions swap. A diff keyed purely on
-    // membership reports "nothing changed" and the canvas keeps the stale z-order.
     const previous = [shape('a'), shape('b')]
     const { shapes } = shapeDiff(previous, [clone(previous[1]), clone(previous[0])])
 
@@ -105,8 +79,6 @@ describe('additions and removals, detected from the array alone', () => {
 
 describe('echo suppression — the R6 mitigation', () => {
   it('IGNORES a changed shape whose id is being dragged', () => {
-    // Your own commit coming back at you. Applying it would snap the rectangle to the last
-    // committed position while your hand is still moving.
     const previous = [shape('a', { x: 500 }), shape('b')]
     const incoming = [{ ...previous[0], x: 10 }, clone(previous[1])]
 
@@ -122,13 +94,11 @@ describe('echo suppression — the R6 mitigation', () => {
 
     const { shapes } = shapeDiff(previous, incoming, new Set(['a']))
 
-    expect(shapes[0].x).toBe(500) // suppressed
-    expect(shapes[1].x).toBe(77) // applied
+    expect(shapes[0].x).toBe(500)
+    expect(shapes[1].x).toBe(77)
   })
 
   it('clears a removed id from the dragging set', () => {
-    // Deleted mid-drag. Left in the set, that id is suppressed forever — and since the set
-    // is what gates echo handling, the shape silently stops syncing for the whole session.
     const previous = [shape('a'), shape('b')]
     const { dragging } = shapeDiff(previous, [clone(previous[1])], new Set(['a', 'b']))
 
@@ -163,8 +133,6 @@ describe('collectRemoteDrags — the in-flight half of the handoff', () => {
   })
 
   it('EXCLUDES your own session', () => {
-    // Konva is already moving that node under your pointer. Rendering your own drag from
-    // the wire adds a network round trip to your own hand, which reads as lag.
     const drags = collectRemoteDrags({ mine: node({ id: 'a', x: 9, y: 9 }) }, 'mine')
 
     expect(drags.size).toBe(0)

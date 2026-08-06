@@ -3,14 +3,9 @@ import { useAuth } from '../../hooks/useAuth'
 import { useAuthSubmit } from '../../hooks/useAuthSubmit'
 import { Field, FormError, SubmitButton } from './FormControls'
 
-/** Rendered inside `Login`'s card, which owns the Google button and the mode toggle. */
 export function Signup() {
   const { signUp } = useAuth()
 
-  // `name` is the R11 mitigation in its entirety: a controlled input holds the display
-  // name in React state before `createUserWithEmailAndPassword` is ever called, and
-  // AuthContext keeps it after. Nothing downstream reads `auth.currentUser.displayName`,
-  // which stays null until the next sign-in.
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')

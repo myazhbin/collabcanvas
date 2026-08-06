@@ -1,10 +1,5 @@
 import type { Viewport } from '../../utils/coords'
 
-/**
- * Zoom readout, pan hints, and the measured cursor latency. The first two answer the
- * questions a grader asks in the first ten seconds; the third is F5's <50 ms target
- * reported from the wire rather than assumed from the send rate.
- */
 export function Hud({
   viewport,
   spaceHeld,
@@ -26,9 +21,6 @@ export function Hud({
       {latencyMs !== null && (
         <>
           <span>·</span>
-          {/* Median, and it includes the throttle's own sampling delay — F5 is explicit
-              that a 20 Hz send rate adds up to 50 ms before the wire and that the target
-              must not be recorded as met on the strength of the interval alone. */}
           <span
             title="median end-to-end cursor latency, measured from the payload timestamp"
             className="tabular-nums"
