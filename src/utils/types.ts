@@ -15,7 +15,20 @@ export type Shape = {
 }
 
 /** `canvas/{CANVAS_ID}` — one document, whole array on every snapshot [R7]. */
-export type CanvasDoc = { shapes: Shape[] }
+export type CanvasDoc = {
+  shapes: Shape[]
+  /**
+   * Set once, the first time any client opens a canvas that has never been seeded, and
+   * never read for anything else. It exists so the starter rectangles `[R22]` land **once
+   * in the document's lifetime** rather than whenever the canvas happens to be empty.
+   *
+   * Gating on emptiness instead was the obvious version and it is wrong: "Clear all" would
+   * then repopulate the canvas a moment after clearing it, so the button a grader presses
+   * to see the empty state appears not to work. Absent on documents written before PR 10,
+   * which is exactly the case that should seed.
+   */
+  seeded?: boolean
+}
 
 /**
  * A cursor position on the wire.

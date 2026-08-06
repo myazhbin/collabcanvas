@@ -23,6 +23,7 @@ import { sessionId } from '../../utils/session'
 import { Cursor } from '../collaboration/Cursor'
 import { Backdrop } from './Backdrop'
 import { Controls } from './Controls'
+import { Hint } from './Hint'
 import { Hud } from './Hud'
 import { ShapesLayer } from './ShapesLayer'
 import type { SessionNode } from '../../utils/types'
@@ -371,6 +372,8 @@ export function Canvas({ sessions }: { sessions: Record<string, SessionNode> }) 
       </div>
 
       <Controls />
+
+      <Hint />
 
       <Hud viewport={viewport} spaceHeld={spaceHeld} latencyMs={latencyMs} />
     </div>

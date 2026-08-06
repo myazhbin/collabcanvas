@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   addShape,
   buildSeed,
+  buildStarter,
   claimLock,
   commitPosition,
   estimateDocBytes,
@@ -279,15 +280,99 @@ describe('buildSeed — PR 10 seed case [R22,R24]', () => {
     expect(seen.size).toBe(2000)
   })
 
-  it('stays comfortably under the 1 MiB document ceiling at the cap [R24]', () => {
-    // Two bounds, and the *lower* one is the one that bit. Every mutation rewrites the
-    // whole array, so the array's size is the size of every write: at 1,456 shapes two
-    // thirds of one user's drags were lost to transaction contention long before anything
-    // approached 1 MiB. The cap has to clear F10's 500-object target and still leave the
-    // document small enough that a write completes before the next one starts.
+  it('stays under the 1 MiB document ceiling at the cap [R24]', () => {
+    // The hard ceiling, and the only one a test can speak for. Past 1 MiB Firestore
+    // rejects the write with `invalid-argument` — not a slow save, no save at all — so
+    // this asserts the *estimate* clears it, and `SHAPE_DOC_BYTES` is deliberately an
+    // over-estimate so clearing it on paper means clearing it on the wire.
+    //
+    // The other ceiling is lower and this test cannot see it: at 1,456 shapes two thirds
+    // of one user's drags were already lost to transaction contention, because every
+    // mutation rewrites the whole array. `MAX_SHAPES` sits past that on purpose — see the
+    // constant for what that costs.
     const full = buildSeed(MAX_SHAPES, opts())
 
     expect(MAX_SHAPES).toBeGreaterThanOrEqual(500)
-    expect(estimateDocBytes(full)).toBeLessThan(1024 * 1024 * 0.3)
+    expect(estimateDocBytes(full)).toBeLessThan(1024 * 1024)
+  })
+})
+
+describe('buildStarter — PR 10, the canvas is never empty [R22]', () => {
+  const starterOpts = { uid: 'alice', now: 1000, idPrefix: 'starter' }
+
+  it('returns 3–5 shapes with every field populated', () => {
+    // Same reason as the seed case: these are written once and then live in the document
+    // forever, so a missing field is not a bad render, it is bad data that outlives the
+    // session that wrote it.
+    const starter = buildStarter(starterOpts)
+
+    expect(starter.length).toBeGreaterThanOrEqual(3)
+    expect(starter.length).toBeLessThanOrEqual(5)
+
+    for (const s of starter) {
+      expect(s.id.length).toBeGreaterThan(0)
+      expect(Number.isFinite(s.x)).toBe(true)
+      expect(Number.isFinite(s.y)).toBe(true)
+      expect(s.w).toBeGreaterThan(0)
+      expect(s.h).toBeGreaterThan(0)
+      expect(s.fill).toMatch(/^#[0-9a-f]{6}$/i)
+      expect(s.createdBy).toBe('alice')
+      expect(s.updatedBy).toBe('alice')
+      expect(s.updatedAt).toBe(1000)
+      // Ringed and undraggable would be a worse first impression than an empty canvas.
+      expect(s.draggedBy).toBeNull()
+    }
+  })
+
+  it('gives every shape a unique id and a unique position', () => {
+    const starter = buildStarter(starterOpts)
+
+    expect(new Set(starter.map((s) => s.id)).size).toBe(starter.length)
+    expect(new Set(starter.map((s) => `${s.x},${s.y}`)).size).toBe(starter.length)
+  })
+
+  it('lands on screen at the viewport the canvas opens on', () => {
+    // The assertion that makes these worth writing at all. `Canvas` opens centred on the
+    // world's middle at scale 1, so a starter block anywhere else is four rectangles the
+    // grader has to go looking for — which is the same blank first screen R22 is about,
+    // reached by a longer route.
+    const starter = buildStarter(starterOpts)
+
+    // Half of a conservative 1280×720 stage: what is reachable without panning on a small
+    // laptop window.
+    for (const s of starter) {
+      expect(Math.abs(s.x + s.w / 2 - WORLD.width / 2)).toBeLessThan(640)
+      expect(Math.abs(s.y + s.h / 2 - WORLD.height / 2)).toBeLessThan(360)
+    }
+  })
+
+  it('centres the block on the world centre', () => {
+    // Per-axis symmetry, so a block that drifts in one direction cannot pass by being
+    // close enough on average.
+    const starter = buildStarter(starterOpts)
+
+    const left = Math.min(...starter.map((s) => s.x))
+    const right = Math.max(...starter.map((s) => s.x + s.w))
+    const top = Math.min(...starter.map((s) => s.y))
+    const bottom = Math.max(...starter.map((s) => s.y + s.h))
+
+    expect((left + right) / 2).toBeCloseTo(WORLD.width / 2)
+    expect((top + bottom) / 2).toBeCloseTo(WORLD.height / 2)
+  })
+
+  it('does not overlap itself', () => {
+    // Distinct positions are not enough — two rectangles 10 px apart still read as one
+    // smeared shape, and the seed bug this suite already covers proved how convincingly
+    // superimposed rectangles imitate a sync failure.
+    const starter = buildStarter(starterOpts)
+
+    for (let i = 0; i < starter.length; i++) {
+      for (let j = i + 1; j < starter.length; j++) {
+        const a = starter[i]
+        const b = starter[j]
+        const apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y
+        expect(apart).toBe(true)
+      }
+    }
   })
 })

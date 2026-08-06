@@ -1486,28 +1486,128 @@ last.
 
 Low effort, high grading yield. Do not skip this for more features.
 
-**Files:** `~src/components/canvas/Controls.tsx` `~src/components/auth/Login.tsx`
-`~src/components/canvas/Canvas.tsx` `~src/utils/shapeOps.ts` `~README.md`
+**Files:** `+src/utils/demoAccounts.ts` `+src/components/canvas/Hint.tsx`
+`~src/components/auth/Login.tsx` `~src/components/canvas/Canvas.tsx`
+`~src/utils/shapeOps.ts` `~src/utils/types.ts` `~src/services/authService.ts`
+`~src/services/canvasService.ts` `~src/services/transactionService.ts`
+`~src/contexts/AuthContext.tsx` `~src/contexts/CanvasContext.tsx`
+`~src/utils/shapeOps.test.ts` `~README.md`
 
-- [ ] Pre-create **three demo accounts**; print the credentials on the login screen under
-      "Try it instantly" — gates 4, 5 and 6 all need two identities `[F7]`
-- [ ] Leave 3–5 rectangles permanently in the canvas document `[R22]`
-- [ ] One-line hint that fades after the first placement `[R22]`
+*`Controls.tsx` needed no change — Seed 500 / Clear all landed there in PR 9. Six files not
+on the original list did: `demoAccounts.ts` for the credentials, `authService`/`AuthContext`
+for the demo sign-in, `types.ts` + `transactionService` + `canvasService` for the once-ever
+starter write, and `Hint.tsx` for the onboarding line.*
+
+- [x] Pre-create **three demo accounts**; print the credentials on the login screen under
+      "Try it instantly" — gates 4, 5 and 6 all need two identities `[F7]`.
+      ***Created on first use rather than pre-created by hand** — see the note below.*
+- [x] Leave 3–5 rectangles permanently in the canvas document `[R22]` — four, at the world
+      centre, written once in the document's lifetime behind a `seeded` flag
+- [x] One-line hint that fades after the first placement `[R22]`
 - [x] ~~"Seed 500" / "Clear all" as **one transaction writing the whole array**~~ —
       **landed in PR 9**, which cannot profile F10's 500-object target without a way to
       create 500 objects. One transaction each, appending rather than replacing `[R22]`
-- [ ] `README.md` — setup guide, deployed link, the documented transactional-LWW +
+- [x] `README.md` — setup guide, deployed link, the documented transactional-LWW +
       soft-lock conflict choice, and a link to [ARCHITECTURE.md](ARCHITECTURE.md)
       `[submission req.]`
+
+### Three decisions worth writing down
+
+**1 — The demo accounts create themselves on first click, rather than being made by hand
+in the console.** The checklist says "pre-create", and the difference matters: nothing in
+the repo can guarantee a hand-made account still exists. A fresh Firebase project, a
+deleted user, a second deployment — any of those turns the fastest path into the app into a
+dead button, and it fails *for the grader* rather than for whoever could fix it.
+`signInAsDemo` therefore signs in, and creates the account if the sign-in says it is not
+there. Two consequences worth knowing:
+
+- **The catch has to be wide.** With email enumeration protection on — the default since
+  2023 — Firebase deliberately collapses "no such user" and "wrong password" into one
+  `auth/invalid-credential`. So a missing account is indistinguishable from a bad password
+  until the create is attempted; `EMAIL_EXISTS` coming back from *that* is what tells the
+  two apart, and it is the one case a user cannot fix, so it says so plainly.
+- **A red `400` in the console on the first-ever click is the mechanism, not a fault.** The
+  probe genuinely is a failed sign-in and the browser logs the fetch itself; nothing in JS
+  can suppress it. Once per account, ever.
+
+**2 — The starter shapes are gated on a `seeded` flag, not on the canvas being empty.**
+Seeding whenever the array is empty was the obvious version and it is wrong: "Clear all"
+would repopulate the canvas a moment after clearing it, so the button a grader presses to
+see the empty state appears not to work. The flag and the shapes go in the **same**
+transaction — split across two writes, two clients opening a fresh canvas simultaneously
+both read `seeded: false`, both append, and the canvas opens on eight rectangles. That is
+the one caller that needs to write a field beside the array, which is why
+`transactionService` grew `mutateDoc` and `mutateShapes` became a thin wrapper over it.
+
+**3 — `MAX_SHAPES` moved 1,000 → 4,000, and the two ceilings are nowhere near each other.**
+The hard one is Firestore's 1 MiB document limit, ≈4,369 shapes, past which the write is
+rejected outright and the canvas silently stops saving. The soft one is *much* lower and
+was measured in PR 8: at 1,456 shapes two thirds of one user's drags were lost to
+contention, because every mutation rewrites the whole array. 4,000 clears the hard ceiling
+and deliberately sits past the soft one — seeding that far is a stress demo, and drags
+above roughly 1,500 should be expected to feel slow. `shapeOps.test.ts` asserts the hard
+ceiling only, because it is the only one a pure test can speak for.
 
 **🧪 `shapeOps.test.ts` (seed case) — Tier 2 · ~5m — ✅ done in PR 9, 6/6 green**
 - [x] `buildSeed(500)` returns **one array of 500 valid shapes**, every field populated —
       a missing field here writes malformed data to 500 entries at once
-- [x] The result stays comfortably under the 1 MiB document ceiling `[R24]`
+- [x] The result stays under the 1 MiB document ceiling `[R24]` *(threshold widened from
+      0.3 MiB to the real ceiling when `MAX_SHAPES` moved — see decision 3 above)*
 - [x] *Added, after the seed shipped stacking every block on the same origin:* no two
       shapes share a position, and successive batches never reuse a coordinate. See PR 9.
 
-**Done when:** a stranger can open the URL and be a second live user in under 30 seconds.
+**🧪 `shapeOps.test.ts` (starter case) — Tier 2 · ~10m — ✅ done, 5/5 green** — these four
+shapes are written **once and then live in the document forever**, so a bad field here
+outlives every session that could notice it.
+- [x] 3–5 shapes, every field populated, `draggedBy: null` — a starter shape nobody can
+      drag would be a worse first impression than an empty canvas `[R10]`
+- [x] Unique ids and unique positions
+- [x] **On screen at the viewport the canvas opens on.** The assertion that makes the rest
+      worth writing: `Canvas` opens centred on the world's middle, so a starter block
+      anywhere else is four rectangles a grader has to go looking for — the same blank
+      first screen R22 is about, reached by a longer route
+- [x] *Added:* the block is centred per-axis, so drift in one axis cannot pass by being
+      close enough on average
+- [x] *Added:* no two starter shapes **overlap** — distinct positions are not enough, since
+      two rectangles 10 px apart read as one smeared shape. PR 9's seed bug proved how
+      convincingly superimposed rectangles imitate a sync failure
+
+**Done when:** a stranger can open the URL and be a second live user in under 30 seconds. ✅
+
+*`bun run test` 115/115 (110 → 115), `tsc -b && vite build` and `oxlint` clean. Everything
+below was driven against the running app and the **live database**.*
+
+| Check | Result |
+|---|---|
+| **Starter shapes land** `[R22]` | four rectangles at exactly **(4850, 4890) (5030, 4890) (4850, 5030) (5030, 5030)** — the world centre, first four palette colours |
+| **Written once, not per load** | two reloads: total unchanged, **exactly one shape at each of the four coordinates** |
+| **Hint visible on a fresh browser** | computed `opacity: 1`, `localStorage` flag null |
+| **Hint fades on first placement** `[R22]` | placement landed (2504 → 2505 shapes) and the hint went to **`opacity: 0`, `aria-hidden="true"`**, flag persisted |
+| **Hint stays gone across reloads** | `opacity: 0` on load, from the `localStorage` flag |
+| **Demo chip, account absent** `[F7]` | clicked **Grace** on a never-used account → signed in and **provisioned**, one 400 probe first |
+| **Display name on a just-created account** `[R11]` | navbar read **"Grace"**, not `grace` — the captured name, not the email prefix |
+| **Per-tab identity** | a fresh tab opened signed **out**; three sessions held three identities, "3 online" |
+| **Sign out** | returned to the login screen, no console storm |
+| **Refactored write path** | delete committed against real Firestore (2505 → 2504) — `mutateDoc` verified, not just typechecked |
+
+**Found and fixed during that pass — two defects the unit tests could not see.** The hint
+rendered at `top-3`, the same row as the toolbar, and at 435 px wide it sat on top of the
+**Seed 500** and **Clear all** buttons — obscuring two controls in order to explain a third.
+Moved below the toolbar. And `grace@demo.collabcanvas.invalid` overran its chip and rendered
+as `grace@demo.collabcanvas.inval…`, an ellipsis eating the end of a credential a grader is
+invited to retype into a second browser. Shortened to `@demo.invalid` (RFC 2606's reserved
+TLD) and the `truncate` dropped, so an address that does not fit wraps rather than lies.
+
+**All three demo accounts now exist**, so the one-time 400 probe is already spent for each
+and no grader will see it. Confirmed incidentally by the strongest multi-identity check the
+build has had: **five tabs of one browser holding five different accounts** — `meowmeow`,
+`kitten`, and all three demo identities — each with its own `sessionId`, all five rendering
+in every tab's panel as **"5 online"**. Five uids, five sessions, nothing deduped away and
+nothing stale. That only works because PR 6 moved auth to `browserSessionPersistence`; on
+the default origin-scoped persistence all five tabs would have collapsed into one identity.
+
+**Still open:** the pass above ran on `localhost`. The 30-second Done-when has not been
+timed by a stranger on the deployed URL; that is PR 11's job.
 
 ---
 
@@ -1518,23 +1618,159 @@ Run all 20 items in PRD §7 **on the deployed URL**, in fresh incognito windows.
 verification layer for everything the unit tests deliberately don't cover — real
 `onDisconnect` behaviour, real network, real multi-client sync.
 
-- [ ] Items 1–6: two browsers, presence, cursors, placement, drag, zoom mismatch
-- [ ] Item 7: same-rectangle contention → clean lockout `[R10]`
-- [ ] Item 8: **two different rectangles dragged at once → both survive** `[R23]`
-- [ ] Items 9–12: refresh mid-drag, 50 rapid shapes, Seed 500, network kill/restore
-- [ ] Item 13: tab close clears presence
-- [ ] Item 14: **sign out** (not close) clears presence, no console storm `[R19]`
-- [ ] Item 15: **two tabs, same browser** → two cursors, closing one keeps the other `[R2]`
-- [ ] Item 16: alt-tab mid-drag doesn't leave a shape locked `[R16]`
-- [ ] Item 17: full departure and return, canvas intact
-- [ ] Item 18: brand-new email, display name on cursor immediately, no reload `[R11]`
-- [ ] Item 19: Google sign-in from a **non-owner** account, no warning screen `[R8]`
-- [ ] Item 20: repeat 18–19 in **Safari** `[R4]`
-- [ ] `npm test` green before the final push
-- [ ] Final: open the exact URL you're about to submit in a fresh incognito window and
-      click the Google button before pasting it anywhere `[R8]`
+### ⚠️ This pass ran on `localhost`, not the deployed URL
 
-**Done when:** twenty green.
+**§7's first line says "on the deployed URL, with production rules", and that was not done.**
+The browser surface declined the Vercel origin, and the run continued against the dev server
+by explicit decision. What that costs is specific, and it is exactly the set of risks §7
+says "deployed" for:
+
+- **R1** — the eight `VITE_FIREBASE_*` vars come from a local `.env`; nothing here proves
+  Vercel's build has them. A miss there is a successful build that throws only when deployed.
+- **R5** — the emulator tests assert the *committed* rule files, and this run used whatever
+  is live. Console drift is what fired in PR 5 and neither layer can see it.
+- **R8** — authorized domains are per-hostname. `localhost` passing says nothing about the
+  Vercel hostname, and that half of R8 only ever fails for someone who is not the owner.
+- **R12** — Vercel's stale-shell caching is not exercised at all.
+
+Everything measured below is real — real Firestore, real RTDB, real auth, two live clients —
+but the automated portion verified the *application*, not the *deployment*.
+
+**The four manual items cut across that caveat and are not recorded here as to which
+environment they ran in.** Item 19 in particular is the direct test of R8 on whichever
+hostname it was run against; if it was the Vercel URL, R8 is genuinely covered and the third
+bullet above no longer applies. Worth pinning down before submission, since it is the
+difference between R8 being closed and being assumed.
+
+- [x] Items 1–6: two clients, presence, cursors, placement, drag, zoom mismatch —
+      **five pass, item 4 fails**
+- [x] Item 7: same-rectangle contention → clean lockout `[R10]`
+- [x] Item 8: **two different rectangles dragged at once → both survive** `[R23]` — covered
+      by `concurrency.test.ts` against the emulator rather than by hand, by decision: the
+      pane gives only the fronted tab layout, so two simultaneous drags cannot be driven
+      honestly in it
+- [x] Items 9–11: refresh mid-drag, 50 rapid shapes, Seed 500 — pass. The **60 FPS half of
+      item 11 was verified manually by the project owner**; it is unmeasurable from the
+      automation, because rAF is frozen whenever the browser pane is hidden
+- [x] Item 12: network kill/restore — **verified manually by the project owner** (DevTools
+      offline; not reachable from the automation, which cannot toggle the network)
+- [x] Item 13: tab close clears presence
+- [x] Item 14: **sign out** (not close) clears presence, no console storm `[R19]`
+- [x] Item 15: **two tabs, same browser** → two cursors, closing one keeps the other `[R2]`
+- [x] Item 16: alt-tab mid-drag doesn't leave a shape locked `[R16]`
+- [x] Item 17: full departure and return, canvas intact *(90 s of zero clients, not 5 min)*
+- [x] Item 18: brand-new email, display name on cursor immediately, no reload `[R11]`
+- [x] Item 19: Google sign-in from a **non-owner** account `[R8]` — **verified manually by
+      the project owner.** Not reachable from the automation, which cannot authenticate to
+      Google, and this is the half of R8 that only ever fails for someone who is not you
+- [x] Item 20: repeat 18–19 in **Safari** `[R4]` — **verified manually by the project
+      owner.** No Safari automation exists in this environment
+- [x] `npm test` green — 115/115, plus **16/16** on the emulator suite
+- [x] Final: open the exact URL you're about to submit in a fresh incognito window and
+      click the Google button before pasting it anywhere `[R8]` — **marked complete by the
+      project owner.** This one is a last-mile ritual rather than a test: it is the only
+      check performed against the *exact* URL being submitted, so it stays meaningful even
+      with item 19 green, and it is worth repeating if that URL ever changes
+
+**Done when:** twenty green. **19 pass, 1 fails** — item 4, on latency, analysed below.
+
+Two provenances in the table, and the distinction is deliberate. **Measured** rows were
+driven by automation against the live Firebase project, with the figure taken from the
+instrument named in the row. **Manual** rows were run by hand by the project owner, because
+the automation cannot reach them at all — it cannot toggle the network, authenticate to
+Google, drive Safari, or sample rAF while the browser pane is hidden. Manual rows carry no
+numbers because none were recorded.
+
+| # | Item | How | Result |
+|---|---|---|---|
+| 1 | Two distinct users | measured | ✅ two tab-scoped sessions, two accounts |
+| 2 | Presence within 2 s | measured | ✅ **926 ms** presence leg (auth adds 1,119 ms on top) |
+| 3 | Labelled cursor moves in B | measured | ✅ "Ada" at the exact published world point |
+| 4 | Rectangle appears **<100 ms** | measured | ❌ **~500–530 ms** empty · **4,476 ms** at 2,510 shapes |
+| 5 | Drag streams, not snaps | measured | ✅ **9 intermediate positions** in one drag |
+| 6 | Zoom mismatch 400 % / 25 % | measured | ✅ drift **0.01–0.12 world units** |
+| 7 | Same rectangle → lockout | measured | ✅ holder's colour, `draggable: false`, others unaffected |
+| 8 | Two different rectangles | emulator | ✅ **with a counter-test proving non-vacuity** |
+| 9 | Refresh mid-drag | measured | ✅ 554 shapes back, lock + in-flight position preserved |
+| 10 | 50 rapid creates | measured | ✅ all 50 reached B · **97 s** to drain |
+| 11 | Seed 500 · 60 FPS | mixed | ✅ seed **1,503 ms**, one transaction · FPS **manual** |
+| 12 | Network kill 10 s | manual | ✅ reconnects and resyncs without a refresh |
+| 13 | Tab close clears presence | measured | ✅ **198 ms** clean unload · 26.6 s on an unclean kill |
+| 14 | Sign out clears presence | measured | ✅ **1,095 ms**, **zero** console output `[R19]` |
+| 15 | Two tabs, same browser | measured | ✅ **2 cursors, 1 avatar**; closing one kept the other `[R2]` |
+| 16 | Alt-tab mid-drag | measured | ✅ lock cleared, shape draggable again `[R16]` |
+| 17 | Leave and return | measured | ✅ 554 shapes intact after 90 s unattended |
+| 18 | New email → name on cursor | measured | ✅ "Testy McTestface", **no reload** `[R11]` |
+| 19 | Google, non-owner account | manual | ✅ no warning screen, no unauthorized-domain error `[R8]` |
+| 20 | Repeat 18–19 in Safari | manual | ✅ `[R4]` |
+
+### Item 4 fails, and it is architectural rather than a bug
+
+A placement takes **~500 ms** to reach the other client on an empty canvas — five times the
+target — and the cause is not sync. **The writer's own echo was 4,162 ms against B's
+4,476 ms on a 2,510-shape canvas, and 522 ms against 519 ms on an empty one**: peer
+propagation costs essentially nothing, and the whole figure is the Firestore transaction.
+
+That is the price of Decision 8. `runTransaction` is a minimum of two round trips — read,
+then commit — to `us-central1`, so <100 ms is not reachable by that path at all. Worth being
+precise about what is *not* slow: **the drag channel.** Item 5 measured nine in-flight
+positions streaming over RTDB inside one ~900 ms drag, and PR 6 measured 37 ms peer-to-peer.
+Live manipulation is immediate; only the durable commit is half a second. Closing item 4
+would mean either an optimistic local insert on the writer — which `shapeDiff` was
+deliberately built to avoid needing — or moving creates off the transaction, which is what
+R23 exists to prevent.
+
+### The second finding is `MAX_SHAPES`, measured rather than argued
+
+Latency scales with the array, because every mutation rewrites all of it: **~500 ms at 4
+shapes, ~4,500 ms at 2,510**, and 50 rapid creates took **97 s** to drain at ~500 shapes.
+The cap is 4,000. Nothing breaks at that size, but a canvas anywhere near it is one where
+every placement takes seconds. The 1,000 this constant held through PR 9 was the better
+number for *feel*; 4,000 is the right number only for surviving a stress demo.
+
+### What the environment could not do
+
+Three limits shaped the method, all worth recording because they will bite the next run:
+
+1. **Only the fronted tab gets layout.** A background tab reports a 0×0 stage, which makes
+   `getIntersection` return `Stage` for every point — PR 7's trap 1, and it silently turns
+   hit-dependent assertions vacuous. Every gesture here asserted a non-zero stage first.
+2. **Timers are clamped to ~1 Hz in every tab of the pane**, fronted or not, so no
+   `setInterval` instrument resolves 100 ms. A tight `MessageChannel` poll is *not* clamped
+   but starves React's scheduler — it measured nothing while preventing the very render it
+   was watching for. What worked: patching `Konva.Node.prototype._setAttr`, and
+   `MutationObserver` — both event-driven and passive.
+3. **rAF is frozen while the pane is hidden** (0 frames in 4 s), which is what blocks item
+   11's FPS half outright.
+
+Two harness notes, for honesty. `document.visibilityState` was overridden to `visible` in
+each tab, because the pane reports every tab hidden and `cursorService` suppresses publishing
+outright while hidden; the override touches that one browser signal and nothing in the sync
+path, and it is what made item 16 a *deterministic* test rather than a hopeful one. And
+Konva 10 binds drag to `window` `mousemove` with `_getFirstPointerId` returning `999` for
+plain mouse events, so `MouseEvent` is correct throughout — an early failure blamed on event
+type was really an off-screen target.
+
+### Two numbers that look like failures and are not
+
+**26.6 s for a killed tab to leave, against 198 ms for a clean one.** Closing a tab through
+the automation kills the renderer without closing the websocket, so the server waits out its
+own timeout; a real close unloads cleanly and `onDisconnect` fires in under a fifth of a
+second. Both numbers are worth keeping — the 26.6 s one quantifies the ungraceful-disconnect
+gap Firebase publishes no timeout for, and it is exactly why `isStale`'s 90 s backstop
+exists `[R17]`.
+
+**A shape briefly at 4820 in A and 4740 in B** after an alt-tab mid-drag. It converged the
+moment the button came up: hiding released the lock and B fell back to the committed value,
+then A's `mouseup` ended the drag and committed 4820 normally. Not the phantom-position bug
+`endDrag`'s snap-back guards against.
+
+### Canvas state left behind
+
+Cleared during the pass (with approval) and restored: **four rectangles in a 2×2 at the
+world centre**, first four palette colours, matching what `buildStarter` produces. The 2,500
+shapes of PR 9 profiling data are gone, and the `seeded` flag stays set, so the automatic
+starter block will not re-fire — these four are ordinary shapes doing the same job `[R22]`.
 
 ---
 

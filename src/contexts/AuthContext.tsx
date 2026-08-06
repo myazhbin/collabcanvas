@@ -10,6 +10,7 @@ import {
   startAuthMachine,
   type AuthStatus,
 } from '../utils/authMachine'
+import type { DemoAccount } from '../utils/demoAccounts'
 
 export type AuthContextValue = {
   status: AuthStatus
@@ -27,6 +28,8 @@ export type AuthContextValue = {
   getIdToken: () => Promise<string | null>
   signUp: (email: string, password: string, displayName: string) => Promise<void>
   logIn: (email: string, password: string) => Promise<void>
+  /** One of the printed demo identities, created on first use — see `authService` [F7]. */
+  signInAsDemo: (account: DemoAccount) => Promise<void>
   signInWithGoogle: () => Promise<void>
   logOut: () => Promise<void>
 }
@@ -68,6 +71,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await authService.logIn(email, password)
   }, [])
 
+  const signInAsDemo = useCallback(async (account: DemoAccount) => {
+    // Captured before the call for the same reason `signUp` does it, and it is not
+    // theoretical here: the *first* click on a demo chip creates the account, so this is a
+    // signup wearing a sign-in's clothes and `user.displayName` is null for the whole of
+    // that first session. Without this the person who bootstraps the demo appears to
+    // everyone else as their email prefix [R11].
+    setCapturedName(account.name)
+    try {
+      await authService.signInAsDemo(account)
+    } catch (err) {
+      setCapturedName(null)
+      throw err
+    }
+  }, [])
+
   const signInWithGoogle = useCallback(() => {
     // Fires first, and this wrapper is deliberately not `async` — an `await` in front
     // of the popup call breaks user-gesture attribution and the popup is blocked [R20].
@@ -101,10 +119,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       getIdToken,
       signUp,
       logIn,
+      signInAsDemo,
       signInWithGoogle,
       logOut,
     }),
-    [state.status, user, capturedName, getIdToken, signUp, logIn, signInWithGoogle, logOut],
+    [
+      state.status,
+      user,
+      capturedName,
+      getIdToken,
+      signUp,
+      logIn,
+      signInAsDemo,
+      signInWithGoogle,
+      logOut,
+    ],
   )
 
   return <AuthContext value={value}>{children}</AuthContext>

@@ -2,13 +2,14 @@ import { useState } from 'react'
 import { useAuth } from '../../hooks/useAuth'
 import { useAuthSubmit } from '../../hooks/useAuthSubmit'
 import { mapAuthError } from '../../utils/authErrors'
+import { DEMO_ACCOUNTS, DEMO_PASSWORD, type DemoAccount } from '../../utils/demoAccounts'
 import { Field, FormError, SubmitButton } from './FormControls'
 import { Signup } from './Signup'
 
 /**
- * The signed-out screen: the card shell, the email/password form, the Google button,
+ * The signed-out screen: the demo block, the email/password form, the Google button,
  * and the toggle to `Signup`. Both sign-in methods live here so the Google path is
- * written once — PR 10 adds the demo-account block under the heading.
+ * written once.
  */
 export function Login() {
   const [mode, setMode] = useState<'login' | 'signup'>('login')
@@ -22,6 +23,10 @@ export function Login() {
             ? 'Sign in to join the shared canvas.'
             : 'Create an account to join the shared canvas.'}
         </p>
+
+        {/* Above the form, not below it. This is the fastest route into the app and the one
+            thing on this screen a first-time visitor should see first [F7,R22]. */}
+        {mode === 'login' && <DemoAccounts />}
 
         {mode === 'login' ? <EmailPasswordForm /> : <Signup />}
 
@@ -44,6 +49,72 @@ export function Login() {
           </button>
         </p>
       </div>
+    </div>
+  )
+}
+
+/**
+ * "Try it instantly" — three one-click identities `[F7,R22]`.
+ *
+ * Gate items 4, 5 and 6 all need two people signed in at once, so the credentials are
+ * printed as well as wired to a button: a grader driving a second browser will often type
+ * them rather than come back to this screen. The first click on a chip creates the account
+ * if it does not exist yet — see `authService.signInAsDemo`.
+ *
+ * `busy` holds the *email* rather than a boolean, so the chip that was clicked can say so
+ * while the other two only grey out. Three buttons all reading "Signing in…" would leave a
+ * grader unsure which identity they are about to become.
+ */
+function DemoAccounts() {
+  const { signInAsDemo } = useAuth()
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const onPick = (account: DemoAccount) => {
+    setBusy(account.email)
+    setError(null)
+
+    // Not cleared on success: the whole screen unmounts when the auth gate flips, and
+    // re-enabling the chips for those frames is long enough to start a second sign-in.
+    void signInAsDemo(account).catch((err: unknown) => {
+      setError(mapAuthError(err))
+      setBusy(null)
+    })
+  }
+
+  return (
+    <div className="mb-6 rounded-xl border border-blue-100 bg-blue-50/60 p-3">
+      <p className="text-xs font-semibold text-blue-900">Try it instantly</p>
+      <p className="mt-0.5 text-xs text-blue-800/80">
+        Pick a name here, then open a second browser and pick a different one — that is the
+        whole demo.
+      </p>
+
+      <div className="mt-2.5 flex flex-col gap-1.5">
+        {DEMO_ACCOUNTS.map((account) => (
+          <button
+            key={account.email}
+            type="button"
+            onClick={() => onPick(account)}
+            disabled={busy !== null}
+            className="flex items-baseline justify-between gap-2 rounded-lg border border-blue-200 bg-white px-2.5 py-1.5 text-left text-sm text-neutral-800 hover:border-blue-400 hover:bg-blue-50 disabled:opacity-60"
+          >
+            <span className="font-medium">
+              {busy === account.email ? 'Signing in…' : account.name}
+            </span>
+            {/* Never `truncate`: this is meant to be *read* and retyped into a second
+                browser, so an address that does not fit has to wrap rather than lose its
+                tail to an ellipsis. */}
+            <span className="font-mono text-xs break-all text-neutral-500">{account.email}</span>
+          </button>
+        ))}
+      </div>
+
+      <p className="mt-2 font-mono text-xs text-blue-900/70">
+        password: <span className="select-all">{DEMO_PASSWORD}</span> — all three
+      </p>
+
+      <FormError message={error} className="mt-2" />
     </div>
   )
 }

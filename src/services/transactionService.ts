@@ -75,10 +75,29 @@ const BACKOFF_BASE_MS = 120
  */
 let queue: Promise<unknown> = Promise.resolve()
 
+/**
+ * The common case: a body that only ever touches the shapes array. Everything except the
+ * starter seed goes through here.
+ */
 export function mutateShapes(
   label: string,
   body: (shapes: Shape[]) => Shape[],
 ): Promise<TxResult> {
+  return mutateDoc(label, (doc) => {
+    const shapes = body(doc.shapes)
+    // Preserving the same-reference-means-no-op contract one level up: `shapeOps` hands
+    // back the identical array when nothing changed, and that has to keep meaning "do not
+    // write" once it is wrapped in a document.
+    return shapes === doc.shapes ? doc : { ...doc, shapes }
+  })
+}
+
+/**
+ * The general form, for the one write that has to change a field *beside* the array —
+ * the starter seed, which sets `seeded` in the same transaction that adds the shapes. Two
+ * separate writes would leave a window where a second client seeds again.
+ */
+export function mutateDoc(label: string, body: (doc: CanvasDoc) => CanvasDoc): Promise<TxResult> {
   const run = queue.then(
     () => attempt(label, body),
     () => attempt(label, body),
@@ -90,27 +109,27 @@ export function mutateShapes(
   return run
 }
 
-async function attempt(label: string, body: (shapes: Shape[]) => Shape[]): Promise<TxResult> {
+async function attempt(label: string, body: (doc: CanvasDoc) => CanvasDoc): Promise<TxResult> {
   let lastError: unknown
 
   for (let n = 0; n < MAX_ATTEMPTS; n++) {
     try {
       return await runTransaction(db, async (tx) => {
         const snap = await tx.get(canvasRef)
-        const current = (snap.data() as CanvasDoc | undefined)?.shapes ?? []
+        const current: CanvasDoc = (snap.data() as CanvasDoc | undefined) ?? { shapes: [] }
         const next = body(current)
 
-        // `shapeOps` returns the same reference when nothing changed, which makes a no-op
+        // The body returns the same reference when nothing changed, which makes a no-op
         // free to detect — and skipping the write matters: Firestore's Spark tier meters
         // writes daily, and a refused lock claim would otherwise still cost one [R14].
-        if (next === current) return { ok: true, applied: false, shapes: current }
+        if (next === current) return { ok: true, applied: false, shapes: current.shapes }
 
         // `set` rather than `update` when the document does not exist yet — `update` on a
         // missing document throws, and the very first shape on a fresh project would fail.
-        if (snap.exists()) tx.update(canvasRef, { shapes: next })
-        else tx.set(canvasRef, { shapes: next } satisfies CanvasDoc)
+        if (snap.exists()) tx.update(canvasRef, { ...next })
+        else tx.set(canvasRef, next)
 
-        return { ok: true, applied: true, shapes: next }
+        return { ok: true, applied: true, shapes: next.shapes }
       })
     } catch (err) {
       lastError = err

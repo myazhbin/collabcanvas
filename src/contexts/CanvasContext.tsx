@@ -8,7 +8,7 @@ import { startDragChannel, type DragChannel } from '../services/cursorService'
 import { PALETTE, SHAPE, WORLD } from '../utils/constants'
 import { clampShapeToWorld } from '../utils/placement'
 import { shapeDiff } from '../utils/shapeDiff'
-import { buildSeed, MAX_SHAPES } from '../utils/shapeOps'
+import { buildSeed, buildStarter, MAX_SHAPES } from '../utils/shapeOps'
 import type { Point } from '../utils/coords'
 import type { CanvasDoc, Shape } from '../utils/types'
 
@@ -38,6 +38,9 @@ export type CanvasContextValue = {
   /** Append `count` rectangles in one transaction — the 500-object profile, and [R22]. */
   seed: (count: number) => void
   clearAll: () => void
+  /** The one-line onboarding hint, shown until this browser places its first rectangle
+   *  [R22]. False from the start for anyone who has placed one before. */
+  showHint: boolean
 }
 
 // Ships beside its provider for the same reason `AuthContext` does — see the note there.
@@ -62,12 +65,18 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
   const [tool, setTool] = useState<Tool>('select')
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
+  const [showHint, setShowHint] = useState(hintUnseen)
+
   /** ids this tab is dragging — echo-suppressed until the commit resolves [R6]. Internal:
    *  the suppression is between this provider and `shapeDiff`, and no view reads it. */
   const [dragging, setDragging] = useState<ReadonlySet<string>>(() => new Set())
 
   const uid = user?.uid
   const drag = useRef<DragChannel | null>(null)
+
+  /** One attempt per mount. The transaction re-checks the flag anyway, so this is only
+   *  here to stop a snapshot storm from queuing a hundred no-op reads behind each other. */
+  const starterAttempted = useRef(false)
 
   /** Read by the snapshot handler, which must not re-subscribe when a drag starts or ends
    *  — resubscribing mid-drag would refetch the document and stutter the shape. */
@@ -89,7 +98,19 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
     const unsubscribe = onSnapshot(
       canvasRef,
       (snap) => {
-        const incoming = (snap.data() as CanvasDoc | undefined)?.shapes ?? []
+        const doc = snap.data() as CanvasDoc | undefined
+        const incoming = doc?.shapes ?? []
+
+        // An empty canvas reads as a broken one, so a document that has never been seeded
+        // gets four rectangles — once, ever [R22]. Decided from the snapshot rather than by
+        // firing a transaction on every mount: the flag is already in hand here, so a
+        // canvas that was seeded long ago costs nothing at all to skip.
+        if (doc?.seeded !== true && !starterAttempted.current) {
+          starterAttempted.current = true
+          void canvasService.ensureStarterShapes(
+            buildStarter({ uid, now: Date.now(), idPrefix: `starter-${crypto.randomUUID()}` }),
+          )
+        }
 
         // The whole array arrives every time — there is no per-shape delta on a single
         // document. `shapeDiff` reuses previous references for anything unchanged so the
@@ -193,6 +214,13 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       }
 
       void canvasService.createShape(shape)
+
+      // The hint has done its job the moment a rectangle exists [R22]. Remembered per
+      // browser, so it does not re-teach the same person the same gesture on every reload —
+      // and a *placement* is the signal rather than a dismiss button, because a hint you
+      // have to close is one more thing between a grader and the canvas.
+      setShowHint(false)
+      rememberHintSeen()
 
       // Optimistic selection. The shape itself arrives via the snapshot — no local insert,
       // because two sources of truth for the array is exactly what `shapeDiff` exists to
@@ -343,6 +371,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       endDrag,
       seed,
       clearAll,
+      showHint,
     }),
     [
       shapes,
@@ -356,6 +385,7 @@ export function CanvasProvider({ children }: { children: ReactNode }) {
       endDrag,
       seed,
       clearAll,
+      showHint,
     ],
   )
 
@@ -367,4 +397,31 @@ function without(set: ReadonlySet<string>, id: string): ReadonlySet<string> {
   const next = new Set(set)
   next.delete(id)
   return next
+}
+
+/**
+ * Whether this browser has yet to place a rectangle.
+ *
+ * Both halves are wrapped, because `localStorage` **throws on access** — not on write, on
+ * the property read itself — in a Safari private window and wherever site data is blocked.
+ * An unguarded read here would take the whole canvas down for those users, to decide
+ * whether to show a hint.
+ */
+const HINT_SEEN_KEY = 'collabcanvas:placed'
+
+function hintUnseen(): boolean {
+  try {
+    return localStorage.getItem(HINT_SEEN_KEY) === null
+  } catch {
+    return true
+  }
+}
+
+function rememberHintSeen(): void {
+  try {
+    localStorage.setItem(HINT_SEEN_KEY, '1')
+  } catch {
+    // Nothing to do and nothing worth logging: the hint reappears next reload, which is a
+    // blemish, not a fault.
+  }
 }

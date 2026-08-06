@@ -1,4 +1,4 @@
-import { mutateShapes, type TxResult } from './transactionService'
+import { mutateDoc, mutateShapes, type TxResult } from './transactionService'
 import {
   addShape,
   claimLock,
@@ -87,4 +87,22 @@ export function seedShapes(seed: Shape[]): Promise<TxResult> {
 /** Empty the canvas — also one write, and a no-op on an already-empty document. */
 export function clearShapes(): Promise<TxResult> {
   return mutateShapes('clear-all', (shapes) => (shapes.length === 0 ? shapes : []))
+}
+
+/**
+ * Write the starter rectangles, **once in the document's lifetime** `[R22]`.
+ *
+ * The `seeded` flag and the shapes go in the *same* transaction, which is why this is the
+ * one caller of `mutateDoc`. Split across two writes, two clients opening a fresh canvas
+ * simultaneously would both read `seeded: false`, both append, and the canvas would open on
+ * eight rectangles — or on twelve, with three of them.
+ *
+ * Appending rather than replacing, on the same principle as `seedShapes`: a document that
+ * predates this flag may already hold real work, and marking it seeded must never be a way
+ * to lose that.
+ */
+export function ensureStarterShapes(starter: Shape[]): Promise<TxResult> {
+  return mutateDoc('starter-seed', (doc) =>
+    doc.seeded ? doc : { ...doc, shapes: [...doc.shapes, ...starter], seeded: true },
+  )
 }
